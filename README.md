@@ -7,6 +7,17 @@ A powerful web-based interface for Claude Code CLI with rich features for develo
 [![React](https://img.shields.io/badge/React-18.3-blue.svg)](https://react.dev/)
 [![Docker Hub](https://img.shields.io/docker/v/valentin2177/claude-code-webui?label=Docker%20Hub&logo=docker)](https://hub.docker.com/r/valentin2177/claude-code-webui)
 
+# Screenshots
+
+Desktop:
+<img width="1874" height="856" alt="Bildschirmfoto_20260104_140400" src="https://github.com/user-attachments/assets/8c3125c2-1068-4043-8133-8741e0286533" />
+<img width="1874" height="856" alt="Bildschirmfoto_20260104_140400" src="https://github.com/user-attachments/assets/f7ebf624-39df-44ad-b0bc-9d685ea43f49" />
+<img width="1874" height="859" alt="Bildschirmfoto_20260104_140428" src="https://github.com/user-attachments/assets/b58f2808-4899-4884-9083-be48a31ef473" />
+<img width="1863" height="860" alt="Bildschirmfoto_20260104_140510" src="https://github.com/user-attachments/assets/bb334cd5-de76-47bd-b0de-0f6c5e9cdbf9" />
+
+Mobile:
+
+
 ## Features
 
 ### Chat Interface
