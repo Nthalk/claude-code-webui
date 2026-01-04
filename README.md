@@ -19,8 +19,8 @@ A powerful web-based interface for Claude Code CLI with rich features for develo
 
 <img width="487" height="737" alt="Bildschirmfoto_20260104_141306" src="https://github.com/user-attachments/assets/91829fc9-af83-461b-bd4e-11271e28033e" />
 <img width="476" height="738" alt="Bildschirmfoto_20260104_141321" src="https://github.com/user-attachments/assets/f5897703-c0e9-48ff-9150-d4018c715553" />
-<img width="519" height="815" alt="Bildschirmfoto_20260104_141404" src="https://github.com/user-attachments/assets/ddc26671-8e94-4f96-b307-56969f180801" />
-<img width="515" height="819" alt="Bildschirmfoto_20260104_141424" src="https://github.com/user-attachments/assets/6b3331c8-4ecc-428d-a749-5fff0c9613c4" />
+<img width="476" height="738" alt="Bildschirmfoto_20260104_141404" src="https://github.com/user-attachments/assets/ddc26671-8e94-4f96-b307-56969f180801" />
+<img width="476" height="738" alt="Bildschirmfoto_20260104_141424" src="https://github.com/user-attachments/assets/6b3331c8-4ecc-428d-a749-5fff0c9613c4" />
 
 
 ## Features
