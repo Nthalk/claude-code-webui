@@ -3,9 +3,15 @@ import type {
   ClientToServerEvents,
   ServerToClientEvents,
   BufferedMessage,
+  SessionMode,
 } from '@claude-code-webui/shared';
 import { useAuthStore } from '@/stores/authStore';
 import { useSessionStore } from '@/stores/sessionStore';
+
+// Simple ID generator
+function generateId() {
+  return Math.random().toString(36).substring(2, 15);
+}
 
 type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -71,8 +77,27 @@ class SocketService {
     });
 
     this.socket.on('session:tool_use', (data) => {
-      const { setActivity } = useSessionStore.getState();
-      setActivity(data.sessionId, {
+      const store = useSessionStore.getState();
+
+      // Store tool execution for display
+      if (data.status === 'started') {
+        store.addToolExecution(data.sessionId, {
+          toolId: data.toolId || generateId(),
+          toolName: data.toolName,
+          status: 'started',
+          input: data.input,
+          timestamp: Date.now(),
+        });
+      } else if (data.toolId) {
+        store.updateToolExecution(data.sessionId, data.toolId, {
+          status: data.status,
+          result: data.result,
+          error: data.error,
+        });
+      }
+
+      // Update activity indicator
+      store.setActivity(data.sessionId, {
         type: 'tool',
         toolName: data.toolName,
         toolStatus: data.status,
@@ -260,6 +285,12 @@ class SocketService {
 
   interruptSession(sessionId: string): void {
     this.socket?.emit('session:interrupt', sessionId);
+  }
+
+  // Set session permission mode
+  setSessionMode(sessionId: string, mode: SessionMode): void {
+    console.log(`[SOCKET] Setting session ${sessionId} mode to ${mode}`);
+    this.socket?.emit('session:set-mode', { sessionId, mode });
   }
 
   // Request to reconnect to a running session and get buffered messages

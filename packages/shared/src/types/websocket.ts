@@ -1,6 +1,9 @@
 import type { Message, StreamingMessage } from './message';
 import type { SessionStatus } from './session';
 
+// Session permission mode
+export type SessionMode = 'planning' | 'auto-accept' | 'manual' | 'danger';
+
 // Image data for sending to Claude
 export interface ImageAttachmentData {
   data: string; // base64 encoded
@@ -38,6 +41,10 @@ export interface ClientToServerEvents {
     model?: 'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview';
     referenceImages?: string[];
   }) => void;
+  'session:set-mode': (data: {
+    sessionId: string;
+    mode: SessionMode;
+  }) => void;
 }
 
 // Usage data from Claude CLI
@@ -65,6 +72,17 @@ export interface TodoItem {
   activeForm?: string;
 }
 
+// Tool execution record for display
+export interface ToolExecution {
+  toolId: string;
+  toolName: string;
+  status: 'started' | 'completed' | 'error';
+  input?: unknown;
+  result?: string;
+  error?: string;
+  timestamp: number;
+}
+
 // Generated image data
 export interface GeneratedImageData {
   sessionId: string;
@@ -85,6 +103,10 @@ export interface ServerToClientEvents {
     sessionId: string;
     toolName: string;
     status: 'started' | 'completed' | 'error';
+    toolId?: string;
+    input?: unknown;
+    result?: string;
+    error?: string;
   }) => void;
   'session:agent': (data: {
     sessionId: string;

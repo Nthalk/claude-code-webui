@@ -802,9 +802,17 @@ async function readMarketplaces(): Promise<MarketplaceInfo[]> {
       };
 
       // Try to read marketplace.json for plugin list
+      // Check both .claude-plugin/marketplace.json and root marketplace.json
       try {
-        const mpJsonPath = path.join(mpInfo.installLocation, 'marketplace.json');
-        const mpContent = await fs.readFile(mpJsonPath, 'utf-8');
+        let mpJsonPath = path.join(mpInfo.installLocation, '.claude-plugin', 'marketplace.json');
+        let mpContent: string;
+        try {
+          mpContent = await fs.readFile(mpJsonPath, 'utf-8');
+        } catch {
+          // Fallback to root marketplace.json
+          mpJsonPath = path.join(mpInfo.installLocation, 'marketplace.json');
+          mpContent = await fs.readFile(mpJsonPath, 'utf-8');
+        }
         const mpData = JSON.parse(mpContent);
         marketplace.plugins = mpData.plugins || [];
       } catch {
@@ -1187,10 +1195,17 @@ router.post('/marketplace/:id/refresh', requireAuth, asyncHandler(async (req, re
     await fs.writeFile(marketplacesFile, JSON.stringify(marketplaces, null, 2), 'utf-8');
 
     // Read the marketplace.json
+    // Check both .claude-plugin/marketplace.json and root marketplace.json
     let plugins: MarketplacePluginInfo[] = [];
     try {
-      const mpJsonPath = path.join(installLocation, 'marketplace.json');
-      const mpContent = await fs.readFile(mpJsonPath, 'utf-8');
+      let mpJsonPath = path.join(installLocation, '.claude-plugin', 'marketplace.json');
+      let mpContent: string;
+      try {
+        mpContent = await fs.readFile(mpJsonPath, 'utf-8');
+      } catch {
+        mpJsonPath = path.join(installLocation, 'marketplace.json');
+        mpContent = await fs.readFile(mpJsonPath, 'utf-8');
+      }
       const mpData = JSON.parse(mpContent);
       plugins = mpData.plugins || [];
     } catch {

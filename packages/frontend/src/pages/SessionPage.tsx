@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Send, Square, FolderOpen, Image, X, Paperclip, CheckCircle2, Brain, Wrench, FileText, Terminal, Search, Edit3, Globe, ListTodo, Circle, CheckCircle, Loader2, ChevronRight, ChevronDown, PanelLeftClose, PanelLeft, GitBranch, MessageSquare, Code2, Star } from 'lucide-react';
+import { Send, Square, FolderOpen, Image, X, Paperclip, CheckCircle2, Brain, Wrench, FileText, Terminal, Search, Edit3, Globe, ListTodo, Circle, CheckCircle, Loader2, ChevronRight, ChevronDown, GitBranch, MessageSquare, Code2, Star } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -18,13 +18,12 @@ import { useSessionStore } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
 import { api } from '@/services/api';
 import { socketService } from '@/services/socket';
-import type { Session, Message, ApiResponse, MessageImage, CliTool, CliToolExecution, Command, CommandExecutionResult } from '@claude-code-webui/shared';
+import type { Session, Message, ApiResponse, MessageImage, CliTool, CliToolExecution, Command, CommandExecutionResult, SessionMode } from '@claude-code-webui/shared';
 import { cn } from '@/lib/utils';
 import { CommandMenu } from '@/components/chat/CommandMenu';
 import { InteractiveOptions, detectOptions, isChoicePrompt } from '@/components/chat/InteractiveOptions';
+import { ToolExecutionCard } from '@/components/chat/ToolExecutionCard';
 import { useDocumentSwipeGesture } from '@/hooks';
-
-type SessionMode = 'planning' | 'auto-accept' | 'manual' | 'danger';
 
 interface ImageAttachment {
   id: string;
@@ -48,7 +47,7 @@ export function SessionPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const lastMessageIdRef = useRef<string | null>(null);
-  const { messages, streamingContent, activity, activeAgent, todos, generatedImages, setMessages, clearStreamingContent, fileTreeOpen, selectedFile, setFileTreeOpen, setSelectedFile, openFile: openFileInStore, openFiles } = useSessionStore();
+  const { messages, streamingContent, activity, activeAgent, todos, generatedImages, toolExecutions, setMessages, clearStreamingContent, selectedFile, setSelectedFile, openFile: openFileInStore, openFiles } = useSessionStore();
   const [showSavedIndicator, setShowSavedIndicator] = useState(false);
   const [selectedCliTool, setSelectedCliTool] = useState<string | null>(null);
   const [isExecutingTool, setIsExecutingTool] = useState(false);
@@ -146,18 +145,19 @@ export function SessionPage() {
   const currentTodos = todos[id || ''] || [];
   const currentActiveAgent = activeAgent[id || ''];
   const currentGeneratedImages = generatedImages[id || ''] || [];
+  const currentToolExecutions = toolExecutions[id || ''] || [];
   const [showTodos, setShowTodos] = useState(true);
-  const [rightPanelTab, setRightPanelTab] = useState<'todos' | 'git'>('todos');
+  const [rightPanelTab, setRightPanelTab] = useState<'files' | 'todos' | 'git'>('files');
   const [mainView, setMainView] = useState<'chat' | 'editor'>('chat');
-  const showFileTree = fileTreeOpen[id || ''] ?? true;
   const currentSelectedFile = selectedFile[id || ''];
   const currentOpenFiles = openFiles[id || ''] || [];
   const hasOpenFiles = currentOpenFiles.length > 0;
 
-  // Combine messages and generated images into a single timeline
+  // Combine messages, generated images, and tool executions into a single timeline
   type TimelineItem =
     | { type: 'message'; data: Message; timestamp: number }
-    | { type: 'image'; data: typeof currentGeneratedImages[0]; timestamp: number };
+    | { type: 'image'; data: typeof currentGeneratedImages[0]; timestamp: number }
+    | { type: 'tool'; data: typeof currentToolExecutions[0]; timestamp: number };
 
   const timeline: TimelineItem[] = [
     ...sessionMessages.map(msg => ({
@@ -169,6 +169,11 @@ export function SessionPage() {
       type: 'image' as const,
       data: img,
       timestamp: img.timestamp,
+    })),
+    ...currentToolExecutions.map(exec => ({
+      type: 'tool' as const,
+      data: exec,
+      timestamp: exec.timestamp,
     })),
   ].sort((a, b) => a.timestamp - b.timestamp);
 
@@ -540,6 +545,13 @@ export function SessionPage() {
     socketService.interruptSession(id);
   };
 
+  const handleModeChange = useCallback((newMode: SessionMode) => {
+    setSessionMode(newMode);
+    if (id) {
+      socketService.setSessionMode(id, newMode);
+    }
+  }, [id]);
+
   const handleCancelCliTool = () => {
     if (cliToolAbortRef.current) {
       cliToolAbortRef.current.abort();
@@ -616,17 +628,44 @@ export function SessionPage() {
               {session.workingDirectory}
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
+            {/* CLI Tool selector - visible in header */}
+            {cliTools && cliTools.length > 0 && (
+              <div className="relative shrink-0">
+                <select
+                  value={selectedCliTool || ''}
+                  onChange={(e) => setSelectedCliTool(e.target.value || null)}
+                  className={cn(
+                    "h-9 px-2 md:px-3 rounded-lg border text-xs md:text-sm font-medium transition-all cursor-pointer",
+                    "focus:outline-none focus:ring-2 focus:ring-ring",
+                    selectedCliTool
+                      ? "bg-orange-500/10 border-orange-500/50 text-orange-600 dark:text-orange-400"
+                      : "bg-background border-input text-muted-foreground hover:bg-muted"
+                  )}
+                >
+                  <option value="">Claude</option>
+                  {cliTools.map((tool) => (
+                    <option key={tool.id} value={tool.id}>
+                      {tool.name}
+                    </option>
+                  ))}
+                </select>
+                {selectedCliTool && (
+                  <div className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full animate-pulse" />
+                )}
+              </div>
+            )}
+
             {session.status === 'running' && (
-              <Button variant="outline" onClick={handleInterrupt} className="gap-2">
+              <Button variant="outline" onClick={handleInterrupt} className="gap-2 h-9">
                 <Square className="h-4 w-4" />
-                Interrupt
+                <span className="hidden sm:inline">Interrupt</span>
               </Button>
             )}
             {isExecutingTool && (
-              <Button variant="outline" onClick={handleCancelCliTool} className="gap-2 border-orange-500/50 text-orange-600 hover:bg-orange-500/10">
+              <Button variant="outline" onClick={handleCancelCliTool} className="gap-2 h-9 border-orange-500/50 text-orange-600 hover:bg-orange-500/10">
                 <Square className="h-4 w-4" />
-                Cancel
+                <span className="hidden sm:inline">Cancel</span>
               </Button>
             )}
 
@@ -668,7 +707,7 @@ export function SessionPage() {
         {/* Controls Bar */}
         <SessionControls
           mode={sessionMode}
-          onModeChange={setSessionMode}
+          onModeChange={handleModeChange}
           usage={currentUsage}
           sessionLimit={usageLimits?.session}
           weeklyAllModels={usageLimits?.weeklyAll}
@@ -676,54 +715,8 @@ export function SessionPage() {
         />
       </div>
 
-      {/* Main content area with file tree and todos sidebars */}
+      {/* Main content area with sidebar */}
       <div className="flex-1 min-h-0 flex gap-4">
-        {/* File Tree Sidebar - Left (hidden on mobile, controlled by mobileView) */}
-        <div className={cn(
-          "shrink-0 transition-all duration-200 border-r",
-          showFileTree ? "w-72" : "w-10",
-          // Mobile: hide unless mobileView is 'files'
-          mobileView !== 'files' && "hidden md:block",
-          mobileView === 'files' && "md:block w-full md:w-72"
-        )}>
-          {showFileTree ? (
-            <div className="h-full flex flex-col">
-              {/* Collapse button */}
-              <div className="shrink-0 flex justify-end p-1 border-b">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6"
-                  onClick={() => id && setFileTreeOpen(id, false)}
-                  title="Hide file tree"
-                >
-                  <PanelLeftClose className="h-4 w-4" />
-                </Button>
-              </div>
-              {/* File Tree */}
-              <FileTree
-                workingDirectory={session.workingDirectory}
-                selectedFile={currentSelectedFile || null}
-                onFileSelect={(path) => id && setSelectedFile(id, path)}
-                onFileOpen={(path, content) => id && openFileInStore(id, path, content)}
-                className="flex-1"
-              />
-            </div>
-          ) : (
-            <div className="h-full flex flex-col items-center pt-2">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
-                onClick={() => id && setFileTreeOpen(id, true)}
-                title="Show file tree"
-              >
-                <PanelLeft className="h-4 w-4" />
-              </Button>
-            </div>
-          )}
-        </div>
-
         {/* Main Content - Chat or Editor (hidden on mobile for files/git/todos views) */}
         <div className={cn(
           "flex-1 min-h-0",
@@ -809,7 +802,7 @@ export function SessionPage() {
                 </Card>
               </div>
             );
-          } else {
+          } else if (item.type === 'image') {
             // Generated Image
             const img = item.data;
             return (
@@ -820,7 +813,7 @@ export function SessionPage() {
                       <Image className="h-4 w-4 text-purple-500" />
                     </div>
                     <span className="text-sm font-medium text-purple-600 dark:text-purple-400">
-                      Generiertes Bild (Gemini)
+                      Generated Image (Gemini)
                     </span>
                   </div>
                   {img.imageBase64 && (
@@ -838,6 +831,14 @@ export function SessionPage() {
                   )}
                   <p className="text-xs text-muted-foreground italic">"{img.prompt}"</p>
                 </Card>
+              </div>
+            );
+          } else {
+            // Tool Execution
+            const exec = item.data;
+            return (
+              <div key={`tool-${exec.toolId}-${index}`} className="flex justify-start animate-fade-in max-w-[80%]">
+                <ToolExecutionCard execution={exec} />
               </div>
             );
           }
@@ -873,8 +874,8 @@ export function SessionPage() {
                   <>
                     <Brain className="h-5 w-5 text-amber-500 animate-pulse" />
                     <div className="flex flex-col">
-                      <span className="text-sm font-medium">Claude denkt nach...</span>
-                      <span className="text-xs text-muted-foreground">Analysiert die Anfrage</span>
+                      <span className="text-sm font-medium">Claude is thinking...</span>
+                      <span className="text-xs text-muted-foreground">Analyzing request</span>
                     </div>
                   </>
                 ) : currentActivity.type === 'tool' && currentActivity.toolName ? (
@@ -958,6 +959,18 @@ export function SessionPage() {
                 {showTodos && (
                   <div className="flex gap-1 flex-1 bg-muted rounded-lg p-0.5">
                     <button
+                      onClick={() => setRightPanelTab('files')}
+                      className={cn(
+                        "flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors",
+                        rightPanelTab === 'files'
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      <FolderOpen className="h-3.5 w-3.5" />
+                      Files
+                    </button>
+                    <button
                       onClick={() => setRightPanelTab('todos')}
                       className={cn(
                         "flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors",
@@ -994,7 +1007,15 @@ export function SessionPage() {
             {/* Content */}
             {showTodos && (
               <div className="flex-1 min-h-0 overflow-hidden">
-                {rightPanelTab === 'todos' ? (
+                {rightPanelTab === 'files' ? (
+                  <FileTree
+                    workingDirectory={session.workingDirectory}
+                    selectedFile={currentSelectedFile || null}
+                    onFileSelect={(path) => id && setSelectedFile(id, path)}
+                    onFileOpen={(path, content) => id && openFileInStore(id, path, content)}
+                    className="h-full"
+                  />
+                ) : rightPanelTab === 'todos' ? (
                   <div className="p-2 space-y-2 overflow-auto h-full">
                     {currentTodos.length === 0 ? (
                       <div className="text-center py-4 text-sm text-muted-foreground">
@@ -1052,7 +1073,7 @@ export function SessionPage() {
         {showSavedIndicator && (
           <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground animate-fade-in">
             <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
-            <span>Antwort gespeichert</span>
+            <span>Response saved</span>
           </div>
         )}
         {/* Image attachments preview */}
@@ -1094,38 +1115,11 @@ export function SessionPage() {
             variant="ghost"
             size="icon"
             onClick={() => fileInputRef.current?.click()}
-            className="h-10 w-10 shrink-0"
+            className="h-12 w-12 md:h-10 md:w-10 shrink-0"
             title="Add image (or paste/drop)"
           >
             <Paperclip className="h-5 w-5" />
           </Button>
-
-          {/* CLI Tool selector */}
-          {cliTools && cliTools.length > 0 && (
-            <div className="relative shrink-0">
-              <select
-                value={selectedCliTool || ''}
-                onChange={(e) => setSelectedCliTool(e.target.value || null)}
-                className={cn(
-                  "h-10 px-3 rounded-lg border text-sm font-medium transition-all cursor-pointer",
-                  "focus:outline-none focus:ring-2 focus:ring-ring",
-                  selectedCliTool
-                    ? "bg-orange-500/10 border-orange-500/50 text-orange-600 dark:text-orange-400"
-                    : "bg-background border-input text-muted-foreground hover:bg-muted"
-                )}
-              >
-                <option value="">Claude</option>
-                {cliTools.map((tool) => (
-                  <option key={tool.id} value={tool.id}>
-                    {tool.name}
-                  </option>
-                ))}
-              </select>
-              {selectedCliTool && (
-                <div className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full animate-pulse" />
-              )}
-            </div>
-          )}
 
           {/* Text input */}
           <div className="flex-1 flex items-center relative">
@@ -1187,10 +1181,10 @@ export function SessionPage() {
               }}
               placeholder={selectedCliTool
                 ? `Prompt for ${cliTools?.find(t => t.id === selectedCliTool)?.name}...`
-                : "Type your message or / for commands..."
+                : "Message..."
               }
               className={cn(
-                "w-full h-10 px-4 rounded-xl border bg-background focus:outline-none focus:ring-2 focus:ring-ring text-sm",
+                "w-full h-12 md:h-10 px-4 rounded-xl border bg-background focus:outline-none focus:ring-2 focus:ring-ring text-base md:text-sm",
                 selectedCliTool && "border-orange-500/30 focus:ring-orange-500/50"
               )}
             />
@@ -1202,7 +1196,7 @@ export function SessionPage() {
             size="icon"
             disabled={(!input.trim() && attachments.length === 0) || isSending || isExecutingTool}
             className={cn(
-              "h-10 w-10 shrink-0",
+              "h-12 w-12 md:h-10 md:w-10 shrink-0",
               selectedCliTool && "bg-orange-600 hover:bg-orange-700"
             )}
           >

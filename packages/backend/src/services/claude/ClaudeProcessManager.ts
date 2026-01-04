@@ -5,6 +5,7 @@ import type {
   InterServerEvents,
   SocketData,
   BufferedMessage,
+  SessionMode,
 } from '@claude-code-webui/shared';
 import { getDatabase } from '../../db';
 import { nanoid } from 'nanoid';
@@ -127,8 +128,11 @@ interface ClaudeProcess {
   buffer: string;
   streamingText: string; // Accumulates text during streaming
   isStreaming: boolean;
+  // Permission mode
+  mode: SessionMode;
   // Tool tracking
   currentToolName: string | null;
+  currentToolId: string | null; // Tool use ID from Claude
   currentToolInput: string; // Accumulates JSON input during tool use
   // Agent tracking
   currentAgentType: string | null;
@@ -150,6 +154,7 @@ interface ClaudeProcess {
 
 export class ClaudeProcessManager {
   private processes: Map<string, ClaudeProcess> = new Map();
+  private pendingModes: Map<string, SessionMode> = new Map(); // Store modes for sessions not yet started
   private io: Server<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>;
 
   constructor(
@@ -161,6 +166,22 @@ export class ClaudeProcessManager {
     setInterval(() => {
       this.cleanupDisconnectedSessions();
     }, 60 * 1000);
+  }
+
+  // Map UI modes to Claude CLI permission flags
+  private getPermissionFlags(mode: SessionMode): string[] {
+    switch (mode) {
+      case 'planning':
+        return ['--permission-mode', 'plan'];
+      case 'auto-accept':
+        return ['--permission-mode', 'acceptEdits'];
+      case 'manual':
+        return ['--permission-mode', 'default'];
+      case 'danger':
+        return ['--dangerously-skip-permissions'];
+      default:
+        return ['--permission-mode', 'acceptEdits'];
+    }
   }
 
   // Helper method to buffer a message
@@ -241,7 +262,7 @@ export class ClaudeProcessManager {
     }, 2000);
   }
 
-  async startSession(sessionId: string, userId: string): Promise<void> {
+  async startSession(sessionId: string, userId: string, mode?: SessionMode): Promise<void> {
     const db = getDatabase();
 
     const session = db
@@ -256,6 +277,11 @@ export class ClaudeProcessManager {
       return;
     }
 
+    // Use provided mode, or pending mode, or default to 'auto-accept'
+    const effectiveMode = mode ?? this.pendingModes.get(sessionId) ?? 'auto-accept';
+    this.pendingModes.delete(sessionId); // Clear pending mode once used
+    console.log(`[MODE] Starting session ${sessionId} with mode ${effectiveMode}`);
+
     // Build command args for stream-json mode
     const args: string[] = [
       '--print',
@@ -263,7 +289,7 @@ export class ClaudeProcessManager {
       '--output-format', 'stream-json',
       '--input-format', 'stream-json',
       '--include-partial-messages',
-      '--dangerously-skip-permissions',
+      ...this.getPermissionFlags(effectiveMode),
     ];
 
     const isResuming = !!session.claude_session_id;
@@ -295,8 +321,11 @@ export class ClaudeProcessManager {
       buffer: '',
       streamingText: '',
       isStreaming: false,
+      // Permission mode
+      mode: effectiveMode,
       // Tool tracking
       currentToolName: null,
+      currentToolId: null,
       currentToolInput: '',
       // Agent tracking
       currentAgentType: null,
@@ -480,12 +509,13 @@ export class ClaudeProcessManager {
       // Handle content_block_start inside stream_event
       if (event.type === 'content_block_start') {
         // Check if this is a tool_use block or text block
-        const contentBlock = (event as { content_block?: { type: string; name?: string } }).content_block;
+        const contentBlock = (event as { content_block?: { type: string; name?: string; id?: string } }).content_block;
         if (contentBlock?.type === 'tool_use') {
           // Tool is being called - track it and show indicator
           proc.currentToolName = contentBlock.name || null;
+          proc.currentToolId = contentBlock.id || nanoid();
           proc.currentToolInput = '';
-          console.log(`[TOOL] Tool starting: ${contentBlock.name}`);
+          console.log(`[TOOL] Tool starting: ${contentBlock.name} (id: ${proc.currentToolId})`);
           this.io.to(`session:${sessionId}`).emit('session:thinking', {
             sessionId,
             isThinking: true,
@@ -494,6 +524,7 @@ export class ClaudeProcessManager {
             this.io.to(`session:${sessionId}`).emit('session:tool_use', {
               sessionId,
               toolName: contentBlock.name,
+              toolId: proc.currentToolId,
               status: 'started',
             });
           }
@@ -502,6 +533,7 @@ export class ClaudeProcessManager {
           proc.isStreaming = true;
           proc.streamingText = '';
           proc.currentToolName = null;
+          proc.currentToolId = null;
           proc.currentToolInput = '';
           // Clear any active agent when text response starts
           if (proc.currentAgentType) {
@@ -548,9 +580,54 @@ export class ClaudeProcessManager {
           this.saveAssistantMessage(sessionId, proc.streamingText.trim());
         }
 
-        // Process completed tool input
+        // Process completed tool input and emit completion
         if (proc.currentToolName && proc.currentToolInput) {
           console.log(`[TOOL] ${proc.currentToolName} completed with input length: ${proc.currentToolInput.length}`);
+
+          // Emit tool completion with input (result will come from tool_result)
+          try {
+            const inputData = JSON.parse(proc.currentToolInput);
+            // For display, show a summary of the input
+            let inputSummary = '';
+            if (proc.currentToolName === 'Read' && inputData.file_path) {
+              inputSummary = inputData.file_path;
+            } else if (proc.currentToolName === 'Write' && inputData.file_path) {
+              inputSummary = inputData.file_path;
+            } else if (proc.currentToolName === 'Edit' && inputData.file_path) {
+              inputSummary = inputData.file_path;
+            } else if (proc.currentToolName === 'Bash' && inputData.command) {
+              inputSummary = inputData.command.substring(0, 100);
+            } else if (proc.currentToolName === 'Glob' && inputData.pattern) {
+              inputSummary = inputData.pattern;
+            } else if (proc.currentToolName === 'Grep' && inputData.pattern) {
+              inputSummary = inputData.pattern;
+            } else if (proc.currentToolName === 'WebFetch' && inputData.url) {
+              inputSummary = inputData.url;
+            } else if (proc.currentToolName === 'WebSearch' && inputData.query) {
+              inputSummary = inputData.query;
+            } else {
+              inputSummary = JSON.stringify(inputData).substring(0, 100);
+            }
+
+            // Note: The actual result will be captured from tool_result message
+            // For now, we just show the input was accepted
+            this.io.to(`session:${sessionId}`).emit('session:tool_use', {
+              sessionId,
+              toolName: proc.currentToolName,
+              toolId: proc.currentToolId || undefined,
+              status: 'completed',
+              input: inputSummary,
+            });
+          } catch {
+            // If parsing fails, just emit with raw input
+            this.io.to(`session:${sessionId}`).emit('session:tool_use', {
+              sessionId,
+              toolName: proc.currentToolName,
+              toolId: proc.currentToolId || undefined,
+              status: 'completed',
+              input: proc.currentToolInput.substring(0, 100),
+            });
+          }
 
           // Handle TodoWrite tool
           if (proc.currentToolName === 'TodoWrite') {
@@ -596,6 +673,7 @@ export class ClaudeProcessManager {
         proc.isStreaming = false;
         proc.streamingText = '';
         proc.currentToolName = null;
+        proc.currentToolId = null;
         proc.currentToolInput = '';
       }
     }
@@ -920,6 +998,60 @@ This is the project you should be working on. All file operations should be rela
         this.cleanupProcess(sessionId);
       }
     }, 2000);
+  }
+
+  // Set permission mode for a session
+  setMode(sessionId: string, userId: string, mode: SessionMode): void {
+    const proc = this.processes.get(sessionId);
+
+    // If no process running, store the mode for when it starts
+    if (!proc) {
+      console.log(`[MODE] No running process for ${sessionId}, storing mode ${mode} for next start`);
+      this.pendingModes.set(sessionId, mode);
+      return;
+    }
+
+    if (proc.userId !== userId) {
+      throw new Error('Unauthorized');
+    }
+
+    if (proc.mode === mode) {
+      console.log(`[MODE] Session ${sessionId} already in mode ${mode}`);
+      return;
+    }
+
+    console.log(`[MODE] Changing session ${sessionId} from ${proc.mode} to ${mode}`);
+
+    // Store the new mode
+    const previousMode = proc.mode;
+    proc.mode = mode;
+
+    // For mode changes on running sessions, we need to restart the process
+    // Save any pending streaming content first
+    if (proc.streamingText.trim().length > 0) {
+      this.saveAssistantMessage(sessionId, proc.streamingText.trim());
+      proc.streamingText = '';
+      proc.isStreaming = false;
+    }
+
+    // Kill the current process and restart with new mode
+    proc.process.kill('SIGTERM');
+
+    // Wait a bit for the process to terminate, then restart
+    setTimeout(async () => {
+      this.processes.delete(sessionId);
+      try {
+        await this.startSession(sessionId, userId, mode);
+        console.log(`[MODE] Session ${sessionId} restarted with mode ${mode}`);
+      } catch (err) {
+        console.error(`[MODE] Failed to restart session ${sessionId}:`, err);
+        // Revert mode on failure
+        const newProc = this.processes.get(sessionId);
+        if (newProc) {
+          newProc.mode = previousMode;
+        }
+      }
+    }, 1000);
   }
 
   private cleanupProcess(sessionId: string): void {

@@ -106,6 +106,19 @@ export function setupWebSocket(httpServer: HttpServer): Server {
       }
     });
 
+    // Set session permission mode
+    socket.on('session:set-mode', ({ sessionId, mode }) => {
+      console.log(`Setting session ${sessionId} mode to ${mode}`);
+      try {
+        processManager.setMode(sessionId, socket.data.userId, mode);
+      } catch (err) {
+        socket.emit('session:error', {
+          sessionId,
+          error: err instanceof Error ? err.message : 'Failed to set mode',
+        });
+      }
+    });
+
     // Send raw input for interactive prompts (trust dialogs, etc.)
     socket.on('session:input', async ({ sessionId, input }) => {
       console.log(`Received session:input for ${sessionId}: "${input}"`);
@@ -159,6 +172,12 @@ export function setupWebSocket(httpServer: HttpServer): Server {
     socket.on('session:reconnect', ({ sessionId, lastTimestamp }) => {
       console.log(`Reconnect request for session ${sessionId} from socket ${socket.id}`);
 
+      // ALWAYS subscribe to the session room, regardless of running state
+      // This ensures the socket receives events when a session starts
+      socket.data.subscribedSessions.add(sessionId);
+      socket.join(`session:${sessionId}`);
+      console.log(`Socket ${socket.id} joined session room ${sessionId}`);
+
       const isRunning = processManager.isSessionRunning(sessionId);
 
       if (isRunning) {
@@ -169,10 +188,6 @@ export function setupWebSocket(httpServer: HttpServer): Server {
         const bufferedMessages = processManager.getSessionBuffer(sessionId, lastTimestamp);
 
         console.log(`Session ${sessionId} reconnected with ${bufferedMessages.length} buffered messages`);
-
-        // Subscribe to session
-        socket.data.subscribedSessions.add(sessionId);
-        socket.join(`session:${sessionId}`);
 
         // Send reconnection data
         socket.emit('session:reconnected', {
