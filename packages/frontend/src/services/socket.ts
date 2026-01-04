@@ -91,6 +91,7 @@ class SocketService {
       } else if (data.toolId) {
         store.updateToolExecution(data.sessionId, data.toolId, {
           status: data.status,
+          input: data.input,
           result: data.result,
           error: data.error,
         });
