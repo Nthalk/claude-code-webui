@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { GitCommit as GitCommitIcon, Loader2 } from 'lucide-react';
+import { GitCommit as GitCommitIcon, Loader2, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { api } from '@/services/api';
 import { toast } from '@/hooks/use-toast';
@@ -54,6 +54,28 @@ export function GitCommit({ workingDirectory }: GitCommitProps) {
     },
   });
 
+  // Generate commit message mutation
+  const generateMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.post<ApiResponse<{ message: string }>>('/api/git/generate-commit-message', {
+        path: workingDirectory,
+      });
+      return response.data;
+    },
+    onSuccess: (data) => {
+      if (data.success && data.data) {
+        setMessage(data.data.message);
+        toast({
+          title: 'Message generated',
+          description: 'AI-generated commit message added',
+        });
+      }
+    },
+    onError: (error: Error) => {
+      toast({ title: 'Generation failed', description: error.message, variant: 'destructive' });
+    },
+  });
+
   const handleCommit = (e: React.FormEvent) => {
     e.preventDefault();
     if (message.trim() && hasStagedChanges) {
@@ -78,8 +100,26 @@ export function GitCommit({ workingDirectory }: GitCommitProps) {
             !hasStagedChanges && 'opacity-50 cursor-not-allowed'
           )}
         />
-        <div className="absolute bottom-2 right-2 text-xs text-muted-foreground">
-          {message.length}/72
+        <div className="absolute bottom-2 right-2 flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">{message.length}/72</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-xs"
+            disabled={!hasStagedChanges || generateMutation.isPending}
+            onClick={() => generateMutation.mutate()}
+            title="Generate commit message with AI"
+          >
+            {generateMutation.isPending ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <>
+                <Sparkles className="h-3 w-3 mr-1" />
+                AI
+              </>
+            )}
+          </Button>
         </div>
       </div>
 

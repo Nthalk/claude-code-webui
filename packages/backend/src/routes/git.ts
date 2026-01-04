@@ -392,4 +392,78 @@ router.post('/discard', requireAuth, asyncHandler(async (req, res) => {
   }
 }));
 
+// Generate commit message using AI
+router.post('/generate-commit-message', requireAuth, asyncHandler(async (req, res) => {
+  const { path: repoPath } = req.body;
+
+  if (!repoPath) {
+    throw new AppError('Path is required', 400, 'MISSING_PATH');
+  }
+
+  try {
+    const git = getGit(repoPath);
+
+    // Get staged diff
+    const diff = await git.diff(['--cached']);
+
+    if (!diff.trim()) {
+      throw new AppError('No staged changes to generate message for', 400, 'NO_STAGED_CHANGES');
+    }
+
+    // Limit diff size to avoid token limits
+    const maxDiffLength = 8000;
+    const truncatedDiff = diff.length > maxDiffLength
+      ? diff.substring(0, maxDiffLength) + '\n\n... (diff truncated)'
+      : diff;
+
+    // Use Claude CLI to generate commit message
+    const { spawn } = await import('child_process');
+
+    const prompt = `Based on this git diff, generate a concise commit message following conventional commits format (feat:, fix:, docs:, refactor:, etc.). Only output the commit message, nothing else. Keep it under 72 characters for the first line. If needed, add a blank line and bullet points for details.
+
+Diff:
+${truncatedDiff}`;
+
+    const claudeProcess = spawn('claude', ['--print', '-p', prompt], {
+      env: { ...process.env },
+    });
+
+    let output = '';
+    let error = '';
+
+    claudeProcess.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    claudeProcess.stderr.on('data', (data) => {
+      error += data.toString();
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      claudeProcess.on('close', (code) => {
+        if (code !== 0 && !output.trim()) {
+          reject(new Error(error || `Claude exited with code ${code}`));
+        } else {
+          resolve();
+        }
+      });
+      claudeProcess.on('error', reject);
+    });
+
+    // Clean up the output
+    const commitMessage = output.trim()
+      // Remove markdown code blocks if present
+      .replace(/^```\w*\n?/gm, '')
+      .replace(/```$/gm, '')
+      .trim();
+
+    res.json({ success: true, data: { message: commitMessage } });
+  } catch (err) {
+    if ((err as Error).message.includes('not a git repository')) {
+      throw new AppError('Not a git repository', 400, 'NOT_GIT_REPO');
+    }
+    throw err;
+  }
+}));
+
 export default router;
