@@ -102,4 +102,30 @@ WebUI started.
 - Frontend PID: $FRONTEND_PID (log: ${LOG_DIR}/frontend.log)
 
 Open: http://${HOST}:5173
+
+Tailing logs (Ctrl+C to stop)...
 EOF
+
+# Tail both logs, exit when either process dies
+tail -f "${LOG_DIR}/backend.log" "${LOG_DIR}/frontend.log" &
+TAIL_PID=$!
+
+# Cleanup on exit
+cleanup() {
+  echo ""
+  echo "Shutting down..."
+  kill "$TAIL_PID" 2>/dev/null || true
+  kill "$BACKEND_PID" 2>/dev/null || true
+  kill "$FRONTEND_PID" 2>/dev/null || true
+  rm -f "${PID_DIR}/backend.pid" "${PID_DIR}/frontend.pid"
+  exit 0
+}
+
+trap cleanup SIGINT SIGTERM
+
+# Wait for processes, exit if either dies
+while kill -0 "$BACKEND_PID" 2>/dev/null && kill -0 "$FRONTEND_PID" 2>/dev/null; do
+  sleep 1
+done
+
+cleanup
