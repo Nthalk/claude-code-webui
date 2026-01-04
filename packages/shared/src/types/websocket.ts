@@ -17,6 +17,9 @@ export interface BufferedMessage {
   timestamp: number;
 }
 
+// Permission response action type
+export type PermissionAction = 'allow_once' | 'allow_project' | 'allow_global' | 'deny';
+
 // Client to Server Events
 export interface ClientToServerEvents {
   'session:send': (data: {
@@ -31,6 +34,7 @@ export interface ClientToServerEvents {
   'session:subscribe': (sessionId: string) => void;
   'session:unsubscribe': (sessionId: string) => void;
   'session:interrupt': (sessionId: string) => void;
+  'session:restart': (sessionId: string) => void;
   'session:reconnect': (data: {
     sessionId: string;
     lastTimestamp?: number;
@@ -44,6 +48,12 @@ export interface ClientToServerEvents {
   'session:set-mode': (data: {
     sessionId: string;
     mode: SessionMode;
+  }) => void;
+  'session:permission_respond': (data: {
+    sessionId: string;
+    requestId: string;
+    action: PermissionAction;
+    pattern?: string;
   }) => void;
 }
 
@@ -81,6 +91,16 @@ export interface ToolExecution {
   result?: string;
   error?: string;
   timestamp: number;
+}
+
+// Pending permission request from Claude
+export interface PendingPermission {
+  sessionId: string;
+  requestId: string;
+  toolName: string;
+  toolInput: unknown;
+  description: string;
+  suggestedPattern: string;
 }
 
 // Generated image data
@@ -123,6 +143,7 @@ export interface ServerToClientEvents {
     bufferedMessages: BufferedMessage[];
     isRunning: boolean;
   }) => void;
+  'session:permission_request': (data: PendingPermission) => void;
   error: (message: string) => void;
 }
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Send, Square, FolderOpen, Image, X, Paperclip, CheckCircle2, Brain, Wrench, FileText, Terminal, Search, Edit3, Globe, ListTodo, Circle, CheckCircle, Loader2, ChevronRight, ChevronDown, GitBranch, MessageSquare, Code2, Star } from 'lucide-react';
+import { Send, Square, FolderOpen, Image, X, Paperclip, CheckCircle2, Brain, Wrench, FileText, Terminal, Search, Edit3, Globe, ListTodo, Circle, CheckCircle, Loader2, ChevronRight, ChevronDown, GitBranch, MessageSquare, Code2, Star, RotateCcw } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -23,7 +23,9 @@ import { cn } from '@/lib/utils';
 import { CommandMenu } from '@/components/chat/CommandMenu';
 import { InteractiveOptions, detectOptions, isChoicePrompt } from '@/components/chat/InteractiveOptions';
 import { ToolExecutionCard } from '@/components/chat/ToolExecutionCard';
+import { PermissionApprovalDialog } from '@/components/chat/PermissionApprovalDialog';
 import { useDocumentSwipeGesture } from '@/hooks';
+import type { PermissionAction } from '@claude-code-webui/shared';
 
 interface ImageAttachment {
   id: string;
@@ -47,7 +49,7 @@ export function SessionPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const lastMessageIdRef = useRef<string | null>(null);
-  const { messages, streamingContent, activity, activeAgent, todos, generatedImages, toolExecutions, setMessages, clearStreamingContent, selectedFile, setSelectedFile, openFile: openFileInStore, openFiles } = useSessionStore();
+  const { messages, streamingContent, activity, activeAgent, todos, generatedImages, toolExecutions, pendingPermissions, setMessages, clearStreamingContent, selectedFile, setSelectedFile, openFile: openFileInStore, openFiles } = useSessionStore();
   const [showSavedIndicator, setShowSavedIndicator] = useState(false);
   const [selectedCliTool, setSelectedCliTool] = useState<string | null>(null);
   const [isExecutingTool, setIsExecutingTool] = useState(false);
@@ -146,6 +148,7 @@ export function SessionPage() {
   const currentActiveAgent = activeAgent[id || ''];
   const currentGeneratedImages = generatedImages[id || ''] || [];
   const currentToolExecutions = toolExecutions[id || ''] || [];
+  const currentPendingPermission = pendingPermissions[id || ''] || null;
   const [showTodos, setShowTodos] = useState(true);
   const [rightPanelTab, setRightPanelTab] = useState<'files' | 'todos' | 'git'>('files');
   const [mainView, setMainView] = useState<'chat' | 'editor'>('chat');
@@ -545,12 +548,31 @@ export function SessionPage() {
     socketService.interruptSession(id);
   };
 
+  const handleRestart = () => {
+    if (!id) return;
+    socketService.restartSession(id);
+  };
+
   const handleModeChange = useCallback((newMode: SessionMode) => {
     setSessionMode(newMode);
     if (id) {
       socketService.setSessionMode(id, newMode);
     }
   }, [id]);
+
+  const handlePermissionResponse = useCallback(async (action: PermissionAction, pattern?: string) => {
+    if (!id || !currentPendingPermission) return;
+    try {
+      await socketService.respondToPermission(
+        id,
+        currentPendingPermission.requestId,
+        action,
+        pattern
+      );
+    } catch (error) {
+      console.error('Failed to respond to permission request:', error);
+    }
+  }, [id, currentPendingPermission]);
 
   const handleCancelCliTool = () => {
     if (cliToolAbortRef.current) {
@@ -662,6 +684,10 @@ export function SessionPage() {
                 <span className="hidden sm:inline">Interrupt</span>
               </Button>
             )}
+            <Button variant="outline" onClick={handleRestart} className="gap-2 h-9" title="Restart Claude session">
+              <RotateCcw className="h-4 w-4" />
+              <span className="hidden sm:inline">Restart</span>
+            </Button>
             {isExecutingTool && (
               <Button variant="outline" onClick={handleCancelCliTool} className="gap-2 h-9 border-orange-500/50 text-orange-600 hover:bg-orange-500/10">
                 <Square className="h-4 w-4" />
@@ -1208,6 +1234,14 @@ export function SessionPage() {
           </Button>
         </form>
       </div>
+
+      {/* Permission Approval Dialog */}
+      {currentPendingPermission && (
+        <PermissionApprovalDialog
+          permission={currentPendingPermission}
+          onRespond={handlePermissionResponse}
+        />
+      )}
 
       {/* Mobile Bottom Navigation */}
       <MobileBottomNav

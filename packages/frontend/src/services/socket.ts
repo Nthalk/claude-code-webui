@@ -4,6 +4,7 @@ import type {
   ServerToClientEvents,
   BufferedMessage,
   SessionMode,
+  PermissionAction,
 } from '@claude-code-webui/shared';
 import { useAuthStore } from '@/stores/authStore';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -149,6 +150,11 @@ class SocketService {
       }
     });
 
+    this.socket.on('session:permission_request', (data) => {
+      console.log(`[SOCKET] session:permission_request received:`, data.toolName, data.description);
+      useSessionStore.getState().setPendingPermission(data.sessionId, data);
+    });
+
     this.socket.on('error', (message) => {
       console.error('Socket error:', message);
     });
@@ -288,6 +294,12 @@ class SocketService {
     this.socket?.emit('session:interrupt', sessionId);
   }
 
+  // Restart session (stop and start fresh)
+  restartSession(sessionId: string): void {
+    console.log(`[SOCKET] Restarting session ${sessionId}`);
+    this.socket?.emit('session:restart', sessionId);
+  }
+
   // Set session permission mode
   setSessionMode(sessionId: string, mode: SessionMode): void {
     console.log(`[SOCKET] Setting session ${sessionId} mode to ${mode}`);
@@ -299,6 +311,42 @@ class SocketService {
     console.log(`[SOCKET] Reconnecting to session ${sessionId}, lastTimestamp=${lastTimestamp}`);
     this.subscribedSessions.add(sessionId);
     this.socket?.emit('session:reconnect', { sessionId, lastTimestamp });
+  }
+
+  // Respond to a permission request
+  async respondToPermission(
+    sessionId: string,
+    requestId: string,
+    action: PermissionAction,
+    pattern?: string
+  ): Promise<void> {
+    console.log(`[SOCKET] Responding to permission ${requestId}: ${action}`);
+
+    // Call the backend API to respond (the long-polling endpoint will pick this up)
+    const token = useAuthStore.getState().token;
+    if (!token) {
+      throw new Error('No auth token');
+    }
+
+    const response = await fetch('/api/permissions/respond', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        requestId,
+        action,
+        pattern,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to respond to permission request');
+    }
+
+    // Clear the pending permission from the store
+    useSessionStore.getState().setPendingPermission(sessionId, null);
   }
 
   getSocket(): TypedSocket | null {

@@ -10,8 +10,14 @@ import type {
 import { getDatabase } from '../../db';
 import { nanoid } from 'nanoid';
 import fs from 'fs/promises';
+import fsSync from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { ChildProcess, spawn as cpSpawn } from 'child_process';
+import { config } from '../../config';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Circular buffer for storing messages for reconnection
 const BUFFER_SIZE = 5000;
@@ -169,20 +175,64 @@ export class ClaudeProcessManager {
     }, 60 * 1000);
   }
 
-  // Map UI modes to Claude CLI permission flags
-  private getPermissionFlags(mode: SessionMode): string[] {
-    switch (mode) {
-      case 'planning':
-        return ['--permission-mode', 'plan'];
-      case 'auto-accept':
-        return ['--permission-mode', 'acceptEdits'];
-      case 'manual':
-        return ['--permission-mode', 'default'];
-      case 'danger':
-        return ['--dangerously-skip-permissions'];
-      default:
-        return ['--permission-mode', 'acceptEdits'];
+  // Get the path to the permission prompt wrapper script
+  private getPermissionPromptScriptPath(): string {
+    // The shell script is always in the source directory (packages/backend/src/cli/)
+    // We need to find it relative to the current file location
+    // In dev (tsx): __dirname = packages/backend/src/services/claude
+    // In prod (compiled): __dirname = packages/backend/dist/services/claude
+
+    // First, try relative to source (development)
+    const devPath = path.resolve(__dirname, '../cli/permission-prompt-wrapper.sh');
+    if (fsSync.existsSync(devPath)) {
+      return devPath;
     }
+
+    // If running from dist, the script is in src (parallel to dist)
+    // __dirname = packages/backend/dist/services/claude
+    // We want: packages/backend/src/cli/permission-prompt-wrapper.sh
+    const prodPath = path.resolve(__dirname, '../../../src/cli/permission-prompt-wrapper.sh');
+    if (fsSync.existsSync(prodPath)) {
+      return prodPath;
+    }
+
+    // Fallback: try to find it from the package root
+    const packageRoot = path.resolve(__dirname, '../../../../');
+    const fallbackPath = path.join(packageRoot, 'src/cli/permission-prompt-wrapper.sh');
+    if (fsSync.existsSync(fallbackPath)) {
+      return fallbackPath;
+    }
+
+    console.warn(`[HOOKS] Could not find permission-prompt-wrapper.sh, tried: ${devPath}, ${prodPath}, ${fallbackPath}`);
+    return devPath; // Return dev path as default
+  }
+
+  // Generate settings JSON with PermissionRequest hook configured
+  private getHookSettings(): string {
+    const scriptPath = this.getPermissionPromptScriptPath();
+    console.log(`[HOOKS] Using permission hook script: ${scriptPath}`);
+
+    // New hook format with matchers
+    // PreToolUse hooks run before every tool execution
+    const settings = {
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: '*',  // Match all tools
+            hooks: [
+              {
+                type: 'command',
+                command: scriptPath,
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const json = JSON.stringify(settings);
+    console.log(`[HOOKS] Settings JSON: ${json}`);
+    return json;
   }
 
   // Helper method to buffer a message
@@ -284,31 +334,53 @@ export class ClaudeProcessManager {
     console.log(`[MODE] Starting session ${sessionId} with mode ${effectiveMode}`);
 
     // Build command args for stream-json mode
+    // IMPORTANT: Always use --dangerously-skip-permissions so our hook is the ONLY permission layer
+    // Without this, Claude's internal permission system would still prompt after our hook approves
     const args: string[] = [
       '--print',
       '--verbose',
+      '--debug', 'hooks',  // Debug hook execution
       '--output-format', 'stream-json',
       '--input-format', 'stream-json',
       '--include-partial-messages',
-      ...this.getPermissionFlags(effectiveMode),
+      '--dangerously-skip-permissions',  // Let our hook handle all permissions
     ];
+
+    // Add permission hook settings for all modes except 'danger'
+    // In danger mode, skip hooks entirely (tools run without any checks)
+    // In other modes, our hook surfaces permission requests to the UI
+    if (effectiveMode !== 'danger') {
+      const hookSettings = this.getHookSettings();
+      args.push('--settings', hookSettings);
+    }
 
     const isResuming = !!session.claude_session_id;
     if (isResuming && session.claude_session_id) {
       args.push('--resume', session.claude_session_id);
     }
 
-    console.log(`Starting Claude with args: ${args.join(' ')}`);
-    console.log(`Working directory: ${session.working_directory}`);
-    console.log(`Resuming: ${isResuming}`);
+    console.log(`[SESSION] ========== Starting Claude Session ==========`);
+    console.log(`[SESSION] Session ID: ${sessionId}`);
+    console.log(`[SESSION] Working directory: ${session.working_directory}`);
+    console.log(`[SESSION] Mode: ${effectiveMode}`);
+    console.log(`[SESSION] Resuming: ${isResuming}`);
+    console.log(`[SESSION] Args: ${args.join(' ')}`);
+    console.log(`[SESSION] Env WEBUI_SESSION_ID: ${sessionId}`);
+    console.log(`[SESSION] Env WEBUI_BACKEND_URL: http://localhost:${config.port}`);
+    console.log(`[SESSION] Env WEBUI_PROJECT_PATH: ${session.working_directory}`);
+    console.log(`[SESSION] ==============================================`);
 
     // Use regular spawn instead of PTY for stream-json mode
     const proc = cpSpawn('claude', args, {
       cwd: session.working_directory,
       env: {
         ...process.env,
-        // Pass session ID so Claude can use it for image generation
+        // Pass session ID so Claude can use it for image generation and permissions
         WEBUI_SESSION_ID: sessionId,
+        // Pass backend URL for permission-prompt script
+        WEBUI_BACKEND_URL: `http://localhost:${config.port}`,
+        // Pass project path for loading project-specific settings
+        WEBUI_PROJECT_PATH: session.working_directory,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -1020,6 +1092,41 @@ This is the project you should be working on. All file operations should be rela
         this.cleanupProcess(sessionId);
       }
     }, 2000);
+  }
+
+  // Restart a session (stop and start fresh)
+  async restartSession(sessionId: string, userId: string): Promise<void> {
+    console.log(`[SESSION] Restarting session ${sessionId}`);
+
+    const proc = this.processes.get(sessionId);
+    const currentMode = proc?.mode ?? this.pendingModes.get(sessionId) ?? 'auto-accept';
+
+    // Stop if running
+    if (proc) {
+      if (proc.userId !== userId) {
+        throw new Error('Unauthorized');
+      }
+
+      // Kill the process immediately
+      proc.process.kill('SIGTERM');
+      this.processes.delete(sessionId);
+    }
+
+    // Clear claude_session_id to start fresh (not resume)
+    const db = getDatabase();
+    db.prepare('UPDATE sessions SET status = ?, claude_session_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
+      'stopped',
+      sessionId
+    );
+    console.log(`[SESSION] Cleared claude_session_id for fresh start`);
+
+    // Wait a moment for cleanup
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // Start fresh with the same mode
+    await this.startSession(sessionId, userId, currentMode);
+
+    console.log(`[SESSION] Session ${sessionId} restarted`);
   }
 
   // Set permission mode for a session
