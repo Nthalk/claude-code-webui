@@ -127,7 +127,7 @@ async function main() {
   app.use(errorHandler);
 
   // Start server
-  httpServer.listen(config.port, () => {
+  httpServer.listen(config.port, '127.0.0.1', () => {
     console.log(`Server running on http://localhost:${config.port}`);
     console.log(`Frontend URL: ${config.frontendUrl}`);
   });

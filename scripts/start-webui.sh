@@ -1,11 +1,54 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Parse arguments
+HOST="localhost"
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --host)
+      HOST="$2"
+      shift 2
+      ;;
+    --host=*)
+      HOST="${1#*=}"
+      shift
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      echo "Usage: $0 [--host <host>]" >&2
+      exit 1
+      ;;
+  esac
+done
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="${ROOT_DIR}/.logs"
 PID_DIR="${ROOT_DIR}/.pids"
 
 mkdir -p "$LOG_DIR" "$PID_DIR"
+
+# Kill existing processes if running
+kill_if_running() {
+  local pid_file="$1"
+  local name="$2"
+  if [[ -f "$pid_file" ]]; then
+    local pid
+    pid=$(cat "$pid_file")
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "Stopping existing $name (PID $pid)..."
+      kill "$pid" 2>/dev/null || true
+      sleep 1
+      # Force kill if still running
+      if kill -0 "$pid" 2>/dev/null; then
+        kill -9 "$pid" 2>/dev/null || true
+      fi
+    fi
+    rm -f "$pid_file"
+  fi
+}
+
+kill_if_running "${PID_DIR}/backend.pid" "backend"
+kill_if_running "${PID_DIR}/frontend.pid" "frontend"
 
 PNPM_BIN="$(command -v pnpm || true)"
 if [[ -z "$PNPM_BIN" && -x "${ROOT_DIR}/node_modules/.bin/pnpm" ]]; then
@@ -48,8 +91,8 @@ echo "Starting backend..."
 BACKEND_PID=$!
 echo "$BACKEND_PID" > "${PID_DIR}/backend.pid"
 
-echo "Starting frontend..."
-"$PNPM_BIN" -C packages/frontend run dev > "${LOG_DIR}/frontend.log" 2>&1 &
+echo "Starting frontend on ${HOST}..."
+"$PNPM_BIN" -C packages/frontend run dev -- --host "$HOST" > "${LOG_DIR}/frontend.log" 2>&1 &
 FRONTEND_PID=$!
 echo "$FRONTEND_PID" > "${PID_DIR}/frontend.pid"
 
@@ -58,5 +101,5 @@ WebUI started.
 - Backend PID:  $BACKEND_PID (log: ${LOG_DIR}/backend.log)
 - Frontend PID: $FRONTEND_PID (log: ${LOG_DIR}/frontend.log)
 
-Open: http://localhost:5173
+Open: http://${HOST}:5173
 EOF
