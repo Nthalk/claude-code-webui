@@ -24,10 +24,14 @@ import {
   Eye,
   EyeOff,
   Sparkles,
+  Palette,
+  Wrench,
+  KeyRound,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { FolderBrowserDialog } from '@/components/ui/folder-browser';
 import { AgentSkillEditorDialog } from '@/components/ui/agent-skill-editor';
 import { PluginEditorDialog } from '@/components/ui/plugin-editor';
@@ -628,72 +632,136 @@ export function SettingsPage() {
           </Card>
         </div>
 
-        {/* Theme Settings */}
-        <section>
-          <h2 className="text-lg font-semibold mb-3">Appearance</h2>
-          <div className="flex gap-2 flex-wrap">
-            {themeOptions.map((option) => {
-              const Icon = option.icon;
-              const isActive = currentTheme === option.value;
+        {/* Tabs Navigation */}
+        <Tabs defaultValue="general" className="w-full">
+          <TabsList className="grid w-full grid-cols-5 h-12">
+            <TabsTrigger value="general" className="gap-2">
+              <Settings2 className="h-4 w-4" />
+              <span className="hidden sm:inline">General</span>
+            </TabsTrigger>
+            <TabsTrigger value="appearance" className="gap-2">
+              <Palette className="h-4 w-4" />
+              <span className="hidden sm:inline">Appearance</span>
+            </TabsTrigger>
+            <TabsTrigger value="api-keys" className="gap-2">
+              <KeyRound className="h-4 w-4" />
+              <span className="hidden sm:inline">API Keys</span>
+            </TabsTrigger>
+            <TabsTrigger value="tools" className="gap-2">
+              <Wrench className="h-4 w-4" />
+              <span className="hidden sm:inline">Tools</span>
+            </TabsTrigger>
+            <TabsTrigger value="extensions" className="gap-2">
+              <Puzzle className="h-4 w-4" />
+              <span className="hidden sm:inline">Extensions</span>
+            </TabsTrigger>
+          </TabsList>
 
-              return (
-                <button
-                  type="button"
-                  key={option.value}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    handleThemeChange(option.value);
-                  }}
-                  className={cn(
-                    "flex items-center gap-2 px-4 py-2.5 rounded-xl border transition-all",
-                    "hover:scale-[1.02] active:scale-[0.98]",
-                    isActive
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border bg-card hover:border-primary/40"
-                  )}
+          {/* General Tab */}
+          <TabsContent value="general" className="space-y-6">
+            {/* Default Working Directory */}
+            <section>
+              <h2 className="text-lg font-semibold mb-3">Default Directory</h2>
+              <div className="flex gap-2">
+                <div className="p-2.5 rounded-lg bg-muted shrink-0">
+                  <FolderOpen className="h-4 w-4 text-muted-foreground" />
+                </div>
+                <Input
+                  value={settings?.defaultWorkingDir || ''}
+                  onChange={(e) =>
+                    updateSettingsMutation.mutate({ defaultWorkingDir: e.target.value || null })
+                  }
+                  placeholder="/home/user/projects"
+                  className="flex-1 font-mono text-sm h-10"
+                />
+                <Button
+                  variant="secondary"
+                  size="icon"
+                  onClick={() => setShowFolderBrowser(true)}
+                  className="shrink-0 h-10 w-10"
                 >
-                  <Icon className="h-4 w-4" />
-                  <span className="text-sm font-medium">{option.label}</span>
-                  {isActive && (
-                    <CheckCircle2 className="h-4 w-4 ml-1" />
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </section>
+                  <FolderSearch className="h-4 w-4" />
+                </Button>
+              </div>
+            </section>
 
-        {/* Default Working Directory */}
-        <section>
-          <h2 className="text-lg font-semibold mb-3">Default Directory</h2>
-          <div className="flex gap-2">
-            <div className="p-2.5 rounded-lg bg-muted shrink-0">
-              <FolderOpen className="h-4 w-4 text-muted-foreground" />
-            </div>
-            <Input
-              value={settings?.defaultWorkingDir || ''}
-              onChange={(e) =>
-                updateSettingsMutation.mutate({ defaultWorkingDir: e.target.value || null })
-              }
-              placeholder="/home/user/projects"
-              className="flex-1 font-mono text-sm h-10"
-            />
-            <Button
-              variant="secondary"
-              size="icon"
-              onClick={() => setShowFolderBrowser(true)}
-              className="shrink-0 h-10 w-10"
-            >
-              <FolderSearch className="h-4 w-4" />
-            </Button>
-          </div>
-        </section>
+            {/* Allowed Tools */}
+            <section>
+              <h2 className="text-lg font-semibold mb-3">Allowed Tools</h2>
+              <div className="flex flex-wrap gap-2">
+                {['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Task', 'TodoWrite'].map((tool) => {
+                  const isEnabled = settings?.allowedTools?.includes(tool);
+                  return (
+                    <button
+                      type="button"
+                      key={tool}
+                      onClick={() => {
+                        const current = settings?.allowedTools || [];
+                        const updated = isEnabled
+                          ? current.filter(t => t !== tool)
+                          : [...current, tool];
+                        updateSettingsMutation.mutate({ allowedTools: updated });
+                      }}
+                      className={cn(
+                        "px-3 py-1.5 rounded-lg text-sm font-medium transition-all",
+                        "hover:scale-105 active:scale-95",
+                        isEnabled
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground hover:bg-muted/80"
+                      )}
+                    >
+                      {tool}
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          </TabsContent>
 
-        {/* Gemini API Key */}
-        <section>
-          <div className="flex items-center gap-2 mb-3">
-            <h2 className="text-lg font-semibold">Gemini API Key</h2>
+          {/* Appearance Tab */}
+          <TabsContent value="appearance" className="space-y-6">
+            <section>
+              <h2 className="text-lg font-semibold mb-3">Theme</h2>
+              <div className="flex gap-2 flex-wrap">
+                {themeOptions.map((option) => {
+                  const Icon = option.icon;
+                  const isActive = currentTheme === option.value;
+
+                  return (
+                    <button
+                      type="button"
+                      key={option.value}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleThemeChange(option.value);
+                      }}
+                      className={cn(
+                        "flex items-center gap-2 px-4 py-2.5 rounded-xl border transition-all",
+                        "hover:scale-[1.02] active:scale-[0.98]",
+                        isActive
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border bg-card hover:border-primary/40"
+                      )}
+                    >
+                      <Icon className="h-4 w-4" />
+                      <span className="text-sm font-medium">{option.label}</span>
+                      {isActive && (
+                        <CheckCircle2 className="h-4 w-4 ml-1" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          </TabsContent>
+
+          {/* API Keys Tab */}
+          <TabsContent value="api-keys" className="space-y-6">
+            {/* Gemini API Key */}
+            <section>
+              <div className="flex items-center gap-2 mb-3">
+                <h2 className="text-lg font-semibold">Gemini API Key</h2>
             <Sparkles className="h-4 w-4 text-amber-500" />
           </div>
           <Card className={cn(
@@ -777,44 +845,12 @@ export function SettingsPage() {
               )}
             </CardContent>
           </Card>
-        </section>
+            </section>
+          </TabsContent>
 
-        {/* Folder Browser Dialog */}
-        <FolderBrowserDialog
-          open={showFolderBrowser}
-          onOpenChange={setShowFolderBrowser}
-          value={settings?.defaultWorkingDir || ''}
-          onChange={(path) => {
-            updateSettingsMutation.mutate({ defaultWorkingDir: path });
-          }}
-        />
-
-        {/* Agent/Skill Editor Dialog */}
-        <AgentSkillEditorDialog
-          open={editorOpen}
-          onOpenChange={setEditorOpen}
-          type={editorType}
-          mode={editorMode}
-          initialData={editingItem?.data}
-          editName={editingItem?.name}
-        />
-
-        {/* Plugin Editor Dialog */}
-        <PluginEditorDialog
-          open={pluginEditorOpen}
-          onOpenChange={setPluginEditorOpen}
-          mode={pluginEditorMode}
-          initialData={editingPlugin?.data}
-          editName={editingPlugin?.name}
-        />
-
-        {/* Marketplace Browser Dialog */}
-        <MarketplaceBrowserDialog
-          open={marketplaceBrowserOpen}
-          onOpenChange={setMarketplaceBrowserOpen}
-        />
-
-        {/* MCP Servers */}
+          {/* Tools Tab */}
+          <TabsContent value="tools" className="space-y-6">
+            {/* MCP Servers */}
         <section>
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
@@ -1107,8 +1143,11 @@ export function SettingsPage() {
             </Card>
           )}
         </section>
+          </TabsContent>
 
-        {/* Claude Agents */}
+          {/* Extensions Tab */}
+          <TabsContent value="extensions" className="space-y-6">
+            {/* Claude Agents */}
         <section>
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
@@ -1557,39 +1596,41 @@ export function SettingsPage() {
               </p>
             )}
           </div>
-        </section>
+            </section>
+          </TabsContent>
+        </Tabs>
 
-        {/* Allowed Tools */}
-        <section>
-          <h2 className="text-lg font-semibold mb-3">Allowed Tools</h2>
-          <div className="flex flex-wrap gap-2">
-            {['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Task', 'TodoWrite'].map((tool) => {
-              const isEnabled = settings?.allowedTools?.includes(tool);
-              return (
-                <button
-                  type="button"
-                  key={tool}
-                  onClick={() => {
-                    const current = settings?.allowedTools || [];
-                    const updated = isEnabled
-                      ? current.filter(t => t !== tool)
-                      : [...current, tool];
-                    updateSettingsMutation.mutate({ allowedTools: updated });
-                  }}
-                  className={cn(
-                    "px-3 py-1.5 rounded-lg text-sm font-medium transition-all",
-                    "hover:scale-105 active:scale-95",
-                    isEnabled
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted text-muted-foreground hover:bg-muted/80"
-                  )}
-                >
-                  {tool}
-                </button>
-              );
-            })}
-          </div>
-        </section>
+        {/* Dialogs */}
+        <FolderBrowserDialog
+          open={showFolderBrowser}
+          onOpenChange={setShowFolderBrowser}
+          value={settings?.defaultWorkingDir || ''}
+          onChange={(path) => {
+            updateSettingsMutation.mutate({ defaultWorkingDir: path });
+          }}
+        />
+
+        <AgentSkillEditorDialog
+          open={editorOpen}
+          onOpenChange={setEditorOpen}
+          type={editorType}
+          mode={editorMode}
+          initialData={editingItem?.data}
+          editName={editingItem?.name}
+        />
+
+        <PluginEditorDialog
+          open={pluginEditorOpen}
+          onOpenChange={setPluginEditorOpen}
+          mode={pluginEditorMode}
+          initialData={editingPlugin?.data}
+          editName={editingPlugin?.name}
+        />
+
+        <MarketplaceBrowserDialog
+          open={marketplaceBrowserOpen}
+          onOpenChange={setMarketplaceBrowserOpen}
+        />
       </div>
     </div>
   );
