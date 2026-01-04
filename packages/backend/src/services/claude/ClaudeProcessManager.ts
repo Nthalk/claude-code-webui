@@ -134,6 +134,7 @@ interface ClaudeProcess {
   currentToolName: string | null;
   currentToolId: string | null; // Tool use ID from Claude
   currentToolInput: string; // Accumulates JSON input during tool use
+  pendingToolResults: Map<string, { toolName: string; input: unknown }>; // Track tools awaiting results
   // Agent tracking
   currentAgentType: string | null;
   // Usage tracking
@@ -327,6 +328,7 @@ export class ClaudeProcessManager {
       currentToolName: null,
       currentToolId: null,
       currentToolInput: '',
+      pendingToolResults: new Map(),
       // Agent tracking
       currentAgentType: null,
       // Usage tracking defaults
@@ -584,39 +586,25 @@ export class ClaudeProcessManager {
         if (proc.currentToolName && proc.currentToolInput) {
           console.log(`[TOOL] ${proc.currentToolName} completed with input length: ${proc.currentToolInput.length}`);
 
-          // Emit tool completion with input (result will come from tool_result)
+          // Emit tool completion with full input data
           try {
             const inputData = JSON.parse(proc.currentToolInput);
-            // For display, show a summary of the input
-            let inputSummary = '';
-            if (proc.currentToolName === 'Read' && inputData.file_path) {
-              inputSummary = inputData.file_path;
-            } else if (proc.currentToolName === 'Write' && inputData.file_path) {
-              inputSummary = inputData.file_path;
-            } else if (proc.currentToolName === 'Edit' && inputData.file_path) {
-              inputSummary = inputData.file_path;
-            } else if (proc.currentToolName === 'Bash' && inputData.command) {
-              inputSummary = inputData.command.substring(0, 100);
-            } else if (proc.currentToolName === 'Glob' && inputData.pattern) {
-              inputSummary = inputData.pattern;
-            } else if (proc.currentToolName === 'Grep' && inputData.pattern) {
-              inputSummary = inputData.pattern;
-            } else if (proc.currentToolName === 'WebFetch' && inputData.url) {
-              inputSummary = inputData.url;
-            } else if (proc.currentToolName === 'WebSearch' && inputData.query) {
-              inputSummary = inputData.query;
-            } else {
-              inputSummary = JSON.stringify(inputData).substring(0, 100);
+
+            // Store tool info for matching with result later
+            if (proc.currentToolId) {
+              proc.pendingToolResults = proc.pendingToolResults || new Map();
+              proc.pendingToolResults.set(proc.currentToolId, {
+                toolName: proc.currentToolName,
+                input: inputData,
+              });
             }
 
-            // Note: The actual result will be captured from tool_result message
-            // For now, we just show the input was accepted
             this.io.to(`session:${sessionId}`).emit('session:tool_use', {
               sessionId,
               toolName: proc.currentToolName,
               toolId: proc.currentToolId || undefined,
               status: 'completed',
-              input: inputSummary,
+              input: inputData,
             });
           } catch {
             // If parsing fails, just emit with raw input
@@ -625,7 +613,7 @@ export class ClaudeProcessManager {
               toolName: proc.currentToolName,
               toolId: proc.currentToolId || undefined,
               status: 'completed',
-              input: proc.currentToolInput.substring(0, 100),
+              input: proc.currentToolInput,
             });
           }
 
@@ -786,11 +774,45 @@ export class ClaudeProcessManager {
     }
 
     // Handle user messages in stream (from subagent interactions) - show thinking
+    // Also extract tool_result content to update tool executions
     if (msg.type === 'user') {
       this.io.to(`session:${sessionId}`).emit('session:thinking', {
         sessionId,
         isThinking: true,
       });
+
+      // Extract tool results from user message content
+      const userMsg = msg as { message?: { content?: Array<{ type: string; tool_use_id?: string; content?: string | Array<{ type: string; text?: string }> }> } };
+      if (userMsg.message?.content && Array.isArray(userMsg.message.content)) {
+        for (const block of userMsg.message.content) {
+          if (block.type === 'tool_result' && block.tool_use_id) {
+            // Extract result text
+            let resultText = '';
+            if (typeof block.content === 'string') {
+              resultText = block.content;
+            } else if (Array.isArray(block.content)) {
+              resultText = block.content
+                .filter((c) => c.type === 'text' && c.text)
+                .map((c) => c.text)
+                .join('\n');
+            }
+
+            // Emit tool result update
+            if (resultText) {
+              console.log(`[TOOL] Result for ${block.tool_use_id}: ${resultText.substring(0, 100)}...`);
+              this.io.to(`session:${sessionId}`).emit('session:tool_use', {
+                sessionId,
+                toolId: block.tool_use_id,
+                toolName: proc.pendingToolResults?.get(block.tool_use_id)?.toolName || 'Unknown',
+                status: 'completed',
+                result: resultText,
+              });
+              // Clean up pending
+              proc.pendingToolResults?.delete(block.tool_use_id);
+            }
+          }
+        }
+      }
     }
 
     // Handle result/completion
