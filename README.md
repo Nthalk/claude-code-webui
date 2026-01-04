@@ -2,9 +2,10 @@
 
 A powerful web-based interface for Claude Code CLI with rich features for development workflows.
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)
-![React](https://img.shields.io/badge/React-18.3-blue.svg)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
+[![React](https://img.shields.io/badge/React-18.3-blue.svg)](https://react.dev/)
+[![Docker Hub](https://img.shields.io/docker/v/zwaetschge/claude-code-webui?label=Docker%20Hub&logo=docker)](https://hub.docker.com/r/zwaetschge/claude-code-webui)
 
 ## Features
 
@@ -85,7 +86,34 @@ A powerful web-based interface for Claude Code CLI with rich features for develo
 
 ## Installation
 
-### Prerequisites
+### Quick Start with Docker Hub (Recommended)
+
+The easiest way to run Claude Code WebUI is using the pre-built Docker image:
+
+```bash
+# Create a directory for docker-compose
+mkdir claude-code-webui && cd claude-code-webui
+
+# Download docker-compose file
+curl -O https://raw.githubusercontent.com/zwaetschge/claude-code-webui/main/docker-compose.hub.yml
+
+# Create .env file with your secrets
+cat > .env << 'EOF'
+SESSION_SECRET=your-session-secret-at-least-32-characters-long
+JWT_SECRET=your-jwt-secret-at-least-32-characters-long
+EOF
+
+# Start the container
+docker-compose -f docker-compose.hub.yml up -d
+```
+
+Access the WebUI at http://localhost:5174
+
+**Requirements:**
+- Docker and Docker Compose
+- Claude Code CLI configured on your host (`~/.claude` directory)
+
+### Prerequisites (for development)
 - Node.js 20+
 - pnpm 9+
 - Claude Code CLI installed and configured
@@ -94,7 +122,7 @@ A powerful web-based interface for Claude Code CLI with rich features for develo
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/claude-code-webui.git
+git clone https://github.com/zwaetschge/claude-code-webui.git
 cd claude-code-webui
 
 # Install dependencies
@@ -123,7 +151,10 @@ pnpm start
 ### Docker Deployment
 
 ```bash
-# Build and run with Docker Compose
+# Option 1: Pull from Docker Hub (recommended)
+docker-compose -f docker-compose.hub.yml up -d
+
+# Option 2: Build locally
 docker-compose up -d --build
 ```
 

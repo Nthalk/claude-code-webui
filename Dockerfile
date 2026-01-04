@@ -1,5 +1,12 @@
 FROM node:20-alpine
 
+# Metadata labels for Docker Hub
+LABEL org.opencontainers.image.title="Claude Code WebUI"
+LABEL org.opencontainers.image.description="Web-based interface for Claude Code CLI"
+LABEL org.opencontainers.image.source="https://github.com/zwaetschge/claude-code-webui"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.vendor="Claude Code WebUI"
+
 # Install pnpm
 RUN corepack enable && corepack prepare pnpm@latest --activate
 

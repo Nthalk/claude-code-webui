@@ -1,0 +1,42 @@
+# Docker Compose file for pulling from Docker Hub
+# Usage: docker-compose -f docker-compose.hub.yml up -d
+#
+# Before running, create a .env file with:
+#   SESSION_SECRET=your-session-secret-at-least-32-characters
+#   JWT_SECRET=your-jwt-secret-at-least-32-characters
+
+services:
+  claude-code-webui:
+    image: zwaetschge/claude-code-webui:latest
+    container_name: claude-code-webui
+    restart: unless-stopped
+    ports:
+      - "5174:3001"
+    environment:
+      - NODE_ENV=production
+      - SESSION_SECRET=${SESSION_SECRET:-changeme-session-secret-at-least-32-chars}
+      - JWT_SECRET=${JWT_SECRET:-changeme-jwt-secret-at-least-32-chars}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5174}
+      - ALLOWED_BASE_PATHS=${ALLOWED_BASE_PATHS:-/home}
+      - CLAUDE_USER_EMAIL=${CLAUDE_USER_EMAIL:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    volumes:
+      # Persist database
+      - claude-data:/app/packages/backend/data
+      # Mount Claude credentials from host
+      - ${HOME}/.claude:/home/node/.claude
+      # Optional: Mount Gemini config
+      - ${HOME}/.gemini:/home/node/.gemini
+      # Mount your project directories (adjust as needed)
+      - ${HOME}:/home/hostuser
+      # Optional: Docker socket for container access
+      # - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - claude-network
+
+volumes:
+  claude-data:
+
+networks:
+  claude-network:
+    driver: bridge
