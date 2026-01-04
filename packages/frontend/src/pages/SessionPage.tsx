@@ -14,8 +14,9 @@ import { useSessionStore } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
 import { api } from '@/services/api';
 import { socketService } from '@/services/socket';
-import type { Session, Message, ApiResponse, MessageImage, CliTool, CliToolExecution } from '@claude-code-webui/shared';
+import type { Session, Message, ApiResponse, MessageImage, CliTool, CliToolExecution, Command, CommandExecutionResult } from '@claude-code-webui/shared';
 import { cn } from '@/lib/utils';
+import { CommandMenu } from '@/components/chat/CommandMenu';
 
 type SessionMode = 'planning' | 'auto-accept' | 'manual' | 'danger';
 
@@ -46,6 +47,8 @@ export function SessionPage() {
   const [selectedCliTool, setSelectedCliTool] = useState<string | null>(null);
   const [isExecutingTool, setIsExecutingTool] = useState(false);
   const cliToolAbortRef = useRef<AbortController | null>(null);
+  const [showCommandMenu, setShowCommandMenu] = useState(false);
+  const [commandMenuIndex, setCommandMenuIndex] = useState(0);
 
   const { usage, addMessage } = useSessionStore();
 
@@ -186,6 +189,18 @@ export function SessionPage() {
     enabled: !!id,
   });
 
+  // Fetch available commands
+  const { data: commands } = useQuery({
+    queryKey: ['commands', session?.workingDirectory],
+    queryFn: async () => {
+      const response = await api.get<ApiResponse<Command[]>>(
+        `/api/commands?projectPath=${encodeURIComponent(session?.workingDirectory || '')}`
+      );
+      return response.data.data || [];
+    },
+    enabled: !!session,
+  });
+
   // Connect to socket and subscribe to session (with reconnect support)
   useEffect(() => {
     if (!id) return;
@@ -323,6 +338,56 @@ export function SessionPage() {
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if ((!input.trim() && attachments.length === 0) || !id || isSending || isExecutingTool) return;
+
+    // Check for slash commands
+    if (input.startsWith('/')) {
+      setShowCommandMenu(false);
+      try {
+        const response = await api.post<ApiResponse<CommandExecutionResult>>('/api/commands/execute', {
+          input,
+          projectPath: session?.workingDirectory,
+          sessionId: id,
+          currentModel: 'claude-sonnet-4-20250514',
+          usage: currentUsage ? {
+            inputTokens: currentUsage.inputTokens,
+            outputTokens: currentUsage.outputTokens,
+            cost: currentUsage.totalCostUsd,
+          } : undefined,
+        });
+
+        const result = response.data.data;
+        if (result) {
+          if (result.action === 'clear') {
+            setMessages(id, []);
+          } else if (result.action === 'send_message' && result.response) {
+            // Send the processed command template as a message
+            socketService.sendMessage(id, result.response);
+          } else if (result.response) {
+            // Show command response as a system message
+            addMessage(id, {
+              id: generateId(),
+              sessionId: id,
+              role: 'assistant',
+              content: result.response,
+              createdAt: new Date().toISOString(),
+            });
+          }
+          if (!result.success && result.error) {
+            addMessage(id, {
+              id: generateId(),
+              sessionId: id,
+              role: 'assistant',
+              content: `⚠️ ${result.error}`,
+              createdAt: new Date().toISOString(),
+            });
+          }
+        }
+        setInput('');
+      } catch (error) {
+        console.error('Command execution failed:', error);
+      }
+      return;
+    }
 
     // If a CLI tool is selected, execute it instead of Claude
     if (selectedCliTool) {
@@ -955,21 +1020,66 @@ export function SessionPage() {
           )}
 
           {/* Text input */}
-          <div className="flex-1 flex items-center">
+          <div className="flex-1 flex items-center relative">
+            {/* Command autocomplete menu */}
+            {showCommandMenu && commands && commands.length > 0 && (
+              <CommandMenu
+                commands={commands}
+                filter={input.startsWith('/') ? input.slice(1) : ''}
+                selectedIndex={commandMenuIndex}
+                onSelect={(cmd) => {
+                  setInput(`/${cmd.name} `);
+                  setShowCommandMenu(false);
+                  textareaRef.current?.focus();
+                }}
+                onClose={() => setShowCommandMenu(false)}
+              />
+            )}
             <input
               ref={textareaRef as React.RefObject<HTMLInputElement>}
               type="text"
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                const value = e.target.value;
+                setInput(value);
+                // Show command menu when typing /
+                if (value.startsWith('/') && !value.includes(' ')) {
+                  setShowCommandMenu(true);
+                  setCommandMenuIndex(0);
+                } else {
+                  setShowCommandMenu(false);
+                }
+              }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
+                if (showCommandMenu) {
+                  const filteredCommands = commands?.filter(cmd =>
+                    cmd.name.toLowerCase().includes((input.slice(1) || '').toLowerCase())
+                  ) || [];
+
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setCommandMenuIndex(i => Math.min(i + 1, filteredCommands.length - 1));
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setCommandMenuIndex(i => Math.max(i - 1, 0));
+                  } else if (e.key === 'Tab' || e.key === 'Enter') {
+                    e.preventDefault();
+                    const selected = filteredCommands[commandMenuIndex];
+                    if (selected) {
+                      setInput(`/${selected.name} `);
+                      setShowCommandMenu(false);
+                    }
+                  } else if (e.key === 'Escape') {
+                    setShowCommandMenu(false);
+                  }
+                } else if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
                   handleSend(e as unknown as React.FormEvent);
                 }
               }}
               placeholder={selectedCliTool
                 ? `Prompt für ${cliTools?.find(t => t.id === selectedCliTool)?.name}...`
-                : "Type your message..."
+                : "Type your message or / for commands..."
               }
               className={cn(
                 "w-full h-10 px-4 rounded-xl border bg-background focus:outline-none focus:ring-2 focus:ring-ring text-sm",

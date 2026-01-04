@@ -8,3 +8,4 @@ export * from './types/cli-tools';
 export * from './types/api';
 export * from './types/websocket';
 export * from './types/github';
+export * from './types/commands';

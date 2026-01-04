@@ -31,6 +31,7 @@ import cliToolsRoutes from './routes/cli-tools';
 import geminiRoutes from './routes/gemini';
 import projectsRoutes from './routes/projects';
 import githubRoutes from './routes/github';
+import commandsRoutes from './routes/commands';
 
 async function main() {
   // Initialize database
@@ -99,6 +100,7 @@ async function main() {
   app.use('/api/gemini', geminiRoutes);
   app.use('/api/projects', projectsRoutes);
   app.use('/api/github', githubRoutes);
+  app.use('/api/commands', commandsRoutes);
 
   // Serve frontend static files in production
   if (config.isProduction) {
