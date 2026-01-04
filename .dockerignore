@@ -1,0 +1,10 @@
+node_modules
+**/node_modules
+.git
+.logs
+.pids
+data
+*.log
+.env.local
+.DS_Store
+.tmp

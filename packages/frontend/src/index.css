@@ -1,0 +1,378 @@
+/* Claude-inspired typography: Styrene B alternatives + Tiempos alternatives */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Claude.ai light theme - exact brand colors */
+    /* Pampas: #F4F3EE = hsl(50, 22%, 95%) */
+    /* Crail: #C15F3C = hsl(18, 53%, 49%) */
+    --background: 50 22% 95%;              /* Pampas #F4F3EE - Claude's cream */
+    --foreground: 24 15% 12%;              /* Warm near-black */
+    --card: 0 0% 100%;                     /* Pure white cards */
+    --card-foreground: 24 15% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 24 15% 12%;
+    --primary: 18 53% 49%;                 /* Crail #C15F3C - Claude's orange */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 45 10% 90%;               /* Warm light gray */
+    --secondary-foreground: 24 10% 25%;
+    --muted: 45 8% 92%;                    /* Cloudy derived */
+    --muted-foreground: 30 6% 45%;
+    --accent: 18 53% 49%;                  /* Same as primary */
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 152 60% 36%;                /* Teal green */
+    --success-foreground: 0 0% 100%;
+    --border: 45 12% 88%;
+    --input: 45 12% 88%;
+    --ring: 18 53% 49%;
+    --radius: 0.75rem;                     /* 12px - rounded-xl standard */
+
+    /* Claude brand tokens */
+    --claude-crail: 18 53% 49%;            /* #C15F3C */
+    --claude-terracotta: 15 65% 56%;       /* #da7756 */
+    --claude-pampas: 50 22% 95%;           /* #F4F3EE */
+    --claude-cloudy: 38 7% 67%;            /* #B1ADA1 */
+
+    /* Effect colors */
+    --shadow-color: 30 15% 30%;
+    --glow-color: 18 53% 49%;
+  }
+
+  html.dark, :root.dark {
+    /* Claude-inspired dark theme - deep charcoal */
+    --background: 24 12% 8%;               /* Deep warm charcoal */
+    --foreground: 45 15% 92%;              /* Warm off-white */
+    --card: 24 10% 11%;                    /* Elevated card surface */
+    --card-foreground: 45 15% 92%;
+    --popover: 24 10% 11%;
+    --popover-foreground: 45 15% 92%;
+    --primary: 18 60% 55%;                 /* Brighter Crail for dark mode */
+    --primary-foreground: 24 12% 8%;
+    --secondary: 24 8% 16%;
+    --secondary-foreground: 45 12% 80%;
+    --muted: 24 8% 14%;
+    --muted-foreground: 30 6% 50%;
+    --accent: 18 60% 55%;
+    --accent-foreground: 24 12% 8%;
+    --destructive: 0 60% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 152 50% 45%;
+    --success-foreground: 0 0% 100%;
+    --border: 24 8% 18%;
+    --input: 24 8% 18%;
+    --ring: 18 60% 55%;
+
+    --claude-crail: 18 60% 55%;
+    --claude-terracotta: 15 70% 60%;
+    --claude-pampas: 45 15% 92%;
+    --claude-cloudy: 30 6% 50%;
+
+    --shadow-color: 24 15% 4%;
+    --glow-color: 18 60% 55%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    font-feature-settings: "rlig" 1, "calt" 1, "ss01" 1;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    /* Space Grotesk is similar to Styrene B - geometric, slightly rounded */
+    font-family: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  /* Typography refinements - Claude uses tight tracking on headings */
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+  }
+
+  /* Body text uses serif (Newsreader is similar to Tiempos) */
+  p, li, .prose {
+    font-family: 'Newsreader', ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  }
+
+  /* UI text stays sans-serif */
+  button, input, select, label, .ui-text {
+    font-family: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', ui-monospace, Consolas, monospace;
+  }
+}
+
+/* Smooth theme transitions */
+@layer utilities {
+  .theme-transition {
+    transition: background-color 0.3s ease,
+                border-color 0.3s ease,
+                color 0.3s ease,
+                box-shadow 0.3s ease;
+  }
+
+  /* Claude-style focus ring */
+  .claude-focus {
+    @apply outline-none ring-2 ring-primary/40 ring-offset-2 ring-offset-background;
+  }
+}
+
+/* Claude-inspired scrollbar - subtle and warm */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--claude-cloudy) / 0.4);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--claude-cloudy) / 0.6);
+  background-clip: content-box;
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--claude-cloudy) / 0.4) transparent;
+}
+
+/* Claude-style components */
+@layer components {
+  /* Card hover with subtle lift */
+  .card-hover {
+    @apply transition-all duration-300 ease-out;
+  }
+
+  .card-hover:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px hsl(var(--shadow-color) / 0.08),
+                0 4px 8px hsl(var(--shadow-color) / 0.04);
+  }
+
+  /* Claude-style card with warm shadow */
+  .claude-card {
+    @apply bg-card rounded-xl border;
+    box-shadow: 0 1px 3px hsl(var(--shadow-color) / 0.04),
+                0 1px 2px hsl(var(--shadow-color) / 0.02);
+  }
+
+  .claude-card:hover {
+    box-shadow: 0 4px 12px hsl(var(--shadow-color) / 0.08),
+                0 2px 4px hsl(var(--shadow-color) / 0.04);
+  }
+
+  /* Status indicators */
+  .status-dot {
+    @apply relative;
+  }
+
+  .status-dot::after {
+    content: '';
+    @apply absolute inset-0 rounded-full animate-ping opacity-75;
+  }
+
+  .status-dot.status-running::after {
+    @apply bg-green-500;
+  }
+
+  /* Gradient text with Claude colors */
+  .gradient-text {
+    background: linear-gradient(135deg, hsl(var(--claude-crail)) 0%, hsl(var(--claude-terracotta)) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Subtle pattern background - Claude uses very subtle patterns */
+  .pattern-bg {
+    background-image:
+      radial-gradient(circle at 1px 1px, hsl(var(--claude-cloudy) / 0.08) 1px, transparent 0);
+    background-size: 20px 20px;
+  }
+
+  /* Glass effect - subtle blur */
+  .glass {
+    background: hsl(var(--card) / 0.85);
+    backdrop-filter: blur(16px) saturate(180%);
+    -webkit-backdrop-filter: blur(16px) saturate(180%);
+  }
+
+  /* Claude-style button */
+  .claude-button {
+    @apply inline-flex items-center justify-center rounded-lg px-4 py-2.5;
+    @apply font-medium text-sm;
+    @apply transition-all duration-200;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2;
+  }
+
+  .claude-button-primary {
+    @apply bg-primary text-primary-foreground;
+    @apply hover:opacity-90 active:scale-[0.98];
+  }
+
+  .claude-button-secondary {
+    @apply bg-secondary text-secondary-foreground;
+    @apply hover:bg-secondary/80 active:scale-[0.98];
+  }
+
+  /* Claude-style input */
+  .claude-input {
+    @apply w-full px-4 py-3 rounded-xl;
+    @apply bg-background border border-border;
+    @apply text-foreground placeholder:text-muted-foreground;
+    @apply transition-all duration-200;
+    @apply focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary;
+  }
+
+  /* Gradient border - warm Claude accent */
+  .gradient-border {
+    position: relative;
+    background: hsl(var(--card));
+    border-radius: var(--radius);
+  }
+
+  .gradient-border::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    padding: 1px;
+    border-radius: inherit;
+    background: linear-gradient(135deg, hsl(var(--claude-crail) / 0.4), transparent 50%, hsl(var(--claude-terracotta) / 0.2));
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  /* Section divider */
+  .section-divider {
+    @apply border-t border-border;
+    background: linear-gradient(90deg, transparent, hsl(var(--claude-crail) / 0.1), transparent);
+    height: 1px;
+  }
+}
+
+/* Animation keyframes */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes glow {
+  0%, 100% { box-shadow: 0 0 16px hsl(var(--glow-color) / 0.12); }
+  50% { box-shadow: 0 0 24px hsl(var(--glow-color) / 0.2); }
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.4s ease-out forwards;
+}
+
+.animate-slide-in {
+  animation: slideIn 0.3s ease-out forwards;
+}
+
+.animate-scale-in {
+  animation: scaleIn 0.2s ease-out forwards;
+}
+
+.animate-glow {
+  animation: glow 3s ease-in-out infinite;
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 2s ease-in-out infinite;
+}
+
+/* Staggered animation delays */
+.stagger-1 { animation-delay: 0.05s; }
+.stagger-2 { animation-delay: 0.1s; }
+.stagger-3 { animation-delay: 0.15s; }
+.stagger-4 { animation-delay: 0.2s; }
+.stagger-5 { animation-delay: 0.25s; }
+
+/* Focus styles - warm Claude ring */
+:focus-visible {
+  @apply outline-none ring-2 ring-primary/40 ring-offset-2 ring-offset-background;
+}
+
+/* Selection - Claude orange tint */
+::selection {
+  background: hsl(var(--claude-crail) / 0.15);
+  color: hsl(var(--foreground));
+}
+
+/* Loader - Claude colors */
+.loader {
+  width: 28px;
+  height: 28px;
+  border: 2.5px solid hsl(var(--muted));
+  border-top-color: hsl(var(--primary));
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Typography utilities */
+.text-balance {
+  text-wrap: balance;
+}
+
+/* Claude-style prose for content areas */
+.claude-prose {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  line-height: 1.7;
+  letter-spacing: 0.01em;
+}
+
+.claude-prose h1,
+.claude-prose h2,
+.claude-prose h3,
+.claude-prose h4 {
+  font-family: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: -0.025em;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+}

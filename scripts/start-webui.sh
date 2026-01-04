@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOG_DIR="${ROOT_DIR}/.logs"
+PID_DIR="${ROOT_DIR}/.pids"
+
+mkdir -p "$LOG_DIR" "$PID_DIR"
+
+PNPM_BIN="$(command -v pnpm || true)"
+if [[ -z "$PNPM_BIN" && -x "${ROOT_DIR}/node_modules/.bin/pnpm" ]]; then
+  PNPM_BIN="${ROOT_DIR}/node_modules/.bin/pnpm"
+fi
+
+if [[ -z "$PNPM_BIN" ]]; then
+  echo "pnpm not found. Install it or run: npm install -D pnpm" >&2
+  exit 1
+fi
+
+if [[ ! -d "${ROOT_DIR}/node_modules" ]]; then
+  echo "Installing workspace dependencies..."
+  "$PNPM_BIN" install
+fi
+
+generate_secret() {
+  python - <<'PY'
+import secrets
+print(secrets.token_hex(16))
+PY
+}
+
+if [[ -z "${SESSION_SECRET:-}" ]]; then
+  SESSION_SECRET="$(generate_secret)"
+  export SESSION_SECRET
+  echo "SESSION_SECRET not set; generated a temporary one for this session."
+fi
+
+if [[ -z "${JWT_SECRET:-}" ]]; then
+  JWT_SECRET="$(generate_secret)"
+  export JWT_SECRET
+  echo "JWT_SECRET not set; generated a temporary one for this session."
+fi
+
+export FRONTEND_URL="${FRONTEND_URL:-http://localhost:5173}"
+
+echo "Starting backend..."
+"$PNPM_BIN" -C packages/backend run dev > "${LOG_DIR}/backend.log" 2>&1 &
+BACKEND_PID=$!
+echo "$BACKEND_PID" > "${PID_DIR}/backend.pid"
+
+echo "Starting frontend..."
+"$PNPM_BIN" -C packages/frontend run dev > "${LOG_DIR}/frontend.log" 2>&1 &
+FRONTEND_PID=$!
+echo "$FRONTEND_PID" > "${PID_DIR}/frontend.pid"
+
+cat <<EOF
+WebUI started.
+- Backend PID:  $BACKEND_PID (log: ${LOG_DIR}/backend.log)
+- Frontend PID: $FRONTEND_PID (log: ${LOG_DIR}/frontend.log)
+
+Open: http://localhost:5173
+EOF
