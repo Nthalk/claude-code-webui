@@ -881,7 +881,7 @@ This is the project you should be working on. All file operations should be rela
     // Clear any pending streaming content
     if (proc.streamingText.trim().length > 0) {
       // Save partial response before interrupt
-      this.saveAssistantMessage(sessionId, proc.streamingText.trim() + '\n\n[Unterbrochen]');
+      this.saveAssistantMessage(sessionId, proc.streamingText.trim() + '\n\n[Interrupted]');
       proc.streamingText = '';
       proc.isStreaming = false;
     }

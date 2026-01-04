@@ -175,15 +175,15 @@ export function SessionPage() {
   // Helper to get tool icon and name
   const getToolDisplay = (toolName: string) => {
     const toolMap: Record<string, { icon: typeof Wrench; label: string }> = {
-      'Write': { icon: FileText, label: 'Schreibt Datei' },
-      'Read': { icon: Search, label: 'Liest Datei' },
-      'Edit': { icon: Edit3, label: 'Bearbeitet Datei' },
-      'Bash': { icon: Terminal, label: 'Führt Befehl aus' },
-      'Glob': { icon: Search, label: 'Sucht Dateien' },
-      'Grep': { icon: Search, label: 'Durchsucht Code' },
-      'WebFetch': { icon: Globe, label: 'Lädt Webseite' },
-      'WebSearch': { icon: Globe, label: 'Sucht im Web' },
-      'Task': { icon: Brain, label: 'Startet Agent' },
+      'Write': { icon: FileText, label: 'Writing file' },
+      'Read': { icon: Search, label: 'Reading file' },
+      'Edit': { icon: Edit3, label: 'Editing file' },
+      'Bash': { icon: Terminal, label: 'Running command' },
+      'Glob': { icon: Search, label: 'Searching files' },
+      'Grep': { icon: Search, label: 'Searching code' },
+      'WebFetch': { icon: Globe, label: 'Fetching webpage' },
+      'WebSearch': { icon: Globe, label: 'Searching web' },
+      'Task': { icon: Brain, label: 'Starting agent' },
     };
     return toolMap[toolName] || { icon: Wrench, label: toolName };
   };
@@ -192,10 +192,10 @@ export function SessionPage() {
   const getAgentDisplay = (agentType: string) => {
     const agentMap: Record<string, string> = {
       'Explore': 'Explorer',
-      'Plan': 'Planer',
-      'general-purpose': 'Allgemein',
-      'claude-code-guide': 'Dokumentation',
-      'research-bot': 'Recherche',
+      'Plan': 'Planner',
+      'general-purpose': 'General',
+      'claude-code-guide': 'Documentation',
+      'research-bot': 'Research',
       'frontend-developer': 'Frontend Dev',
       'mobile-developer': 'Mobile Dev',
       'backend-dev': 'Backend Dev',
@@ -626,7 +626,7 @@ export function SessionPage() {
             {isExecutingTool && (
               <Button variant="outline" onClick={handleCancelCliTool} className="gap-2 border-orange-500/50 text-orange-600 hover:bg-orange-500/10">
                 <Square className="h-4 w-4" />
-                Abbrechen
+                Cancel
               </Button>
             )}
 
@@ -695,7 +695,7 @@ export function SessionPage() {
                   size="icon"
                   className="h-6 w-6"
                   onClick={() => id && setFileTreeOpen(id, false)}
-                  title="Dateibaum ausblenden"
+                  title="Hide file tree"
                 >
                   <PanelLeftClose className="h-4 w-4" />
                 </Button>
@@ -716,7 +716,7 @@ export function SessionPage() {
                 size="icon"
                 className="h-8 w-8"
                 onClick={() => id && setFileTreeOpen(id, true)}
-                title="Dateibaum anzeigen"
+                title="Show file tree"
               >
                 <PanelLeft className="h-4 w-4" />
               </Button>
@@ -902,7 +902,7 @@ export function SessionPage() {
                       <span className="w-2 h-2 bg-current rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
                       <span className="w-2 h-2 bg-current rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                     </div>
-                    <span className="text-sm text-muted-foreground">Arbeitet...</span>
+                    <span className="text-sm text-muted-foreground">Working...</span>
                   </>
                 )}
               </div>
@@ -956,23 +956,20 @@ export function SessionPage() {
                 </button>
 
                 {showTodos && (
-                  <div className="flex gap-1 flex-1">
+                  <div className="flex gap-1 flex-1 bg-muted rounded-lg p-0.5">
                     <button
                       onClick={() => setRightPanelTab('todos')}
                       className={cn(
                         "flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors",
                         rightPanelTab === 'todos'
-                          ? "bg-primary text-primary-foreground"
-                          : "hover:bg-muted text-muted-foreground"
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
                       )}
                     >
                       <ListTodo className="h-3.5 w-3.5" />
-                      Aufgaben
+                      Tasks
                       {currentTodos.length > 0 && (
-                        <span className={cn(
-                          "px-1 py-0.5 text-[10px] rounded-full",
-                          rightPanelTab === 'todos' ? "bg-primary-foreground/20" : "bg-muted"
-                        )}>
+                        <span className="px-1 py-0.5 text-[10px] rounded-full bg-muted">
                           {currentTodos.filter(t => t.status !== 'completed').length}
                         </span>
                       )}
@@ -982,8 +979,8 @@ export function SessionPage() {
                       className={cn(
                         "flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors",
                         rightPanelTab === 'git'
-                          ? "bg-primary text-primary-foreground"
-                          : "hover:bg-muted text-muted-foreground"
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
                       )}
                     >
                       <GitBranch className="h-3.5 w-3.5" />
@@ -1001,7 +998,7 @@ export function SessionPage() {
                   <div className="p-2 space-y-2 overflow-auto h-full">
                     {currentTodos.length === 0 ? (
                       <div className="text-center py-4 text-sm text-muted-foreground">
-                        Keine Aufgaben
+                        No tasks
                       </div>
                     ) : (
                       currentTodos.map((todo, index) => (
@@ -1189,7 +1186,7 @@ export function SessionPage() {
                 }
               }}
               placeholder={selectedCliTool
-                ? `Prompt für ${cliTools?.find(t => t.id === selectedCliTool)?.name}...`
+                ? `Prompt for ${cliTools?.find(t => t.id === selectedCliTool)?.name}...`
                 : "Type your message or / for commands..."
               }
               className={cn(
