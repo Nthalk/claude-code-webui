@@ -1,10 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Parse arguments
-HOST="localhost"
-UI_PORT="5173"
-PORT="3006"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Load .env file if present (supports KEY=value format)
+load_env() {
+  local env_file="$1"
+  if [[ -f "$env_file" ]]; then
+    echo "Loading $env_file..."
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      # Skip comments and empty lines
+      [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+      # Export valid KEY=value pairs
+      if [[ "$line" =~ ^[a-zA-Z_][a-zA-Z0-9_]*= ]]; then
+        export "$line"
+      fi
+    done < "$env_file"
+  fi
+}
+
+# Load root .env files (later files override earlier)
+load_env "${ROOT_DIR}/.env"
+load_env "${ROOT_DIR}/.env.local"
+
+# Parse arguments (env vars override defaults, CLI args override env vars)
+HOST="${HOST:-localhost}"
+UI_PORT="${UI_PORT:-5173}"
+PORT="${PORT:-3006}"
 while [[ $# -gt 0 ]]; do
   case $1 in
     --host)
@@ -39,7 +62,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="${ROOT_DIR}/.logs"
 PID_DIR="${ROOT_DIR}/.pids"
 
@@ -110,7 +132,7 @@ BACKEND_PID=$!
 echo "$BACKEND_PID" > "${PID_DIR}/backend.pid"
 
 echo "Starting frontend on ${HOST}:${UI_PORT}..."
-BACKEND_PORT="$PORT" "$PNPM_BIN" -C packages/frontend run dev -- --host "$HOST" --port "$UI_PORT" > "${LOG_DIR}/frontend.log" 2>&1 &
+BACKEND_PORT="$PORT" VITE_PORT="$UI_PORT" VITE_HOST="$HOST" "$PNPM_BIN" -C packages/frontend run dev > "${LOG_DIR}/frontend.log" 2>&1 &
 FRONTEND_PID=$!
 echo "$FRONTEND_PID" > "${PID_DIR}/frontend.pid"
 

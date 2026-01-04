@@ -4,6 +4,8 @@ import path from 'path';
 
 const backendPort = process.env.BACKEND_PORT || '3006';
 const backendUrl = `http://localhost:${backendPort}`;
+const serverPort = parseInt(process.env.VITE_PORT || '5173', 10);
+const serverHost = process.env.VITE_HOST || 'localhost';
 
 export default defineConfig({
   plugins: [react()],
@@ -41,7 +43,8 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    port: serverPort,
+    host: serverHost,
     proxy: {
       '/api': {
         target: backendUrl,
