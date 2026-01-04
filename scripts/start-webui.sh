@@ -3,6 +3,8 @@ set -euo pipefail
 
 # Parse arguments
 HOST="localhost"
+UI_PORT="5173"
+PORT="3006"
 while [[ $# -gt 0 ]]; do
   case $1 in
     --host)
@@ -13,9 +15,25 @@ while [[ $# -gt 0 ]]; do
       HOST="${1#*=}"
       shift
       ;;
+    --ui-port)
+      UI_PORT="$2"
+      shift 2
+      ;;
+    --ui-port=*)
+      UI_PORT="${1#*=}"
+      shift
+      ;;
+    --port)
+      PORT="$2"
+      shift 2
+      ;;
+    --port=*)
+      PORT="${1#*=}"
+      shift
+      ;;
     *)
       echo "Unknown option: $1" >&2
-      echo "Usage: $0 [--host <host>]" >&2
+      echo "Usage: $0 [--host <host>] [--ui-port <port>] [--port <port>]" >&2
       exit 1
       ;;
   esac
@@ -84,24 +102,24 @@ if [[ -z "${JWT_SECRET:-}" ]]; then
   echo "JWT_SECRET not set; generated a temporary one for this session."
 fi
 
-export FRONTEND_URL="${FRONTEND_URL:-http://localhost:5173}"
+export FRONTEND_URL="${FRONTEND_URL:-http://${HOST}:${UI_PORT}}"
 
-echo "Starting backend..."
-"$PNPM_BIN" -C packages/backend run dev > "${LOG_DIR}/backend.log" 2>&1 &
+echo "Starting backend on port ${PORT}..."
+PORT="$PORT" "$PNPM_BIN" -C packages/backend run dev > "${LOG_DIR}/backend.log" 2>&1 &
 BACKEND_PID=$!
 echo "$BACKEND_PID" > "${PID_DIR}/backend.pid"
 
-echo "Starting frontend on ${HOST}..."
-"$PNPM_BIN" -C packages/frontend run dev -- --host "$HOST" > "${LOG_DIR}/frontend.log" 2>&1 &
+echo "Starting frontend on ${HOST}:${UI_PORT}..."
+BACKEND_PORT="$PORT" "$PNPM_BIN" -C packages/frontend run dev -- --host "$HOST" --port "$UI_PORT" > "${LOG_DIR}/frontend.log" 2>&1 &
 FRONTEND_PID=$!
 echo "$FRONTEND_PID" > "${PID_DIR}/frontend.pid"
 
 cat <<EOF
 WebUI started.
-- Backend PID:  $BACKEND_PID (log: ${LOG_DIR}/backend.log)
-- Frontend PID: $FRONTEND_PID (log: ${LOG_DIR}/frontend.log)
+- Backend:  http://localhost:${PORT} (PID $BACKEND_PID)
+- Frontend: http://${HOST}:${UI_PORT} (PID $FRONTEND_PID)
 
-Open: http://${HOST}:5173
+Open: http://${HOST}:${UI_PORT}
 
 Tailing logs (Ctrl+C to stop)...
 EOF

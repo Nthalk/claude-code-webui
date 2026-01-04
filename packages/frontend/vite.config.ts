@@ -2,6 +2,9 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 
+const backendPort = process.env.BACKEND_PORT || '3006';
+const backendUrl = `http://localhost:${backendPort}`;
+
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -41,36 +44,36 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:3006',
+        target: backendUrl,
         changeOrigin: true,
       },
       // Only proxy backend auth routes, not /auth/callback (frontend route)
       '/auth/github': {
-        target: 'http://localhost:3006',
+        target: backendUrl,
         changeOrigin: true,
       },
       '/auth/google': {
-        target: 'http://localhost:3006',
+        target: backendUrl,
         changeOrigin: true,
       },
       '/auth/claude': {
-        target: 'http://localhost:3006',
+        target: backendUrl,
         changeOrigin: true,
       },
       '/auth/me': {
-        target: 'http://localhost:3006',
+        target: backendUrl,
         changeOrigin: true,
       },
       '/auth/logout': {
-        target: 'http://localhost:3006',
+        target: backendUrl,
         changeOrigin: true,
       },
       '/auth/providers': {
-        target: 'http://localhost:3006',
+        target: backendUrl,
         changeOrigin: true,
       },
       '/socket.io': {
-        target: 'http://localhost:3006',
+        target: backendUrl,
         changeOrigin: true,
         ws: true,
       },
