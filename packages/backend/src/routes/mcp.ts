@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { nanoid } from 'nanoid';
+import { spawn } from 'child_process';
 import { z } from 'zod';
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth';
 import { getDatabase } from '../db';
@@ -201,5 +202,149 @@ router.delete('/:id', requireAuth, (req, res) => {
 
   res.json({ success: true });
 });
+
+// Test MCP server connection
+router.post('/:id/test', requireAuth, async (req, res) => {
+  const userId = (req as AuthenticatedRequest).userId;
+  const db = getDatabase();
+
+  const row = db
+    .prepare(
+      `SELECT id, user_id, name, type, command, args, url, env, enabled, created_at
+       FROM mcp_servers WHERE id = ? AND user_id = ?`
+    )
+    .get(req.params.id, userId) as Record<string, unknown> | undefined;
+
+  if (!row) {
+    throw new AppError('MCP server not found', 404, 'NOT_FOUND');
+  }
+
+  const server = parseMcpServer(row);
+
+  try {
+    if (server.type === 'subprocess') {
+      // Test subprocess by trying to spawn and checking if it starts
+      const result = await testSubprocessMcp(server.command!, server.args || []);
+      res.json({ success: true, data: result });
+    } else if (server.type === 'sse') {
+      // Test SSE by trying to connect to the URL
+      const result = await testSseMcp(server.url!);
+      res.json({ success: true, data: result });
+    } else {
+      throw new AppError('Unknown server type', 400, 'UNKNOWN_TYPE');
+    }
+  } catch (error) {
+    res.json({
+      success: true,
+      data: {
+        connected: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      },
+    });
+  }
+});
+
+// Helper to test subprocess MCP server
+async function testSubprocessMcp(
+  command: string,
+  args: string[]
+): Promise<{ connected: boolean; error?: string; output?: string }> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      proc.kill();
+      resolve({ connected: false, error: 'Connection timeout (5s)' });
+    }, 5000);
+
+    // Parse command - might be "npx something" or just "something"
+    const parts = command.split(/\s+/);
+    const cmd = parts[0];
+    const cmdArgs = [...parts.slice(1), ...args];
+
+    const proc = spawn(cmd, cmdArgs, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env },
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout?.on('data', (data) => {
+      stdout += data.toString();
+      // If we get any output, the server started successfully
+      clearTimeout(timeout);
+      proc.kill();
+      resolve({ connected: true, output: stdout.substring(0, 200) });
+    });
+
+    proc.stderr?.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    proc.on('error', (err) => {
+      clearTimeout(timeout);
+      resolve({ connected: false, error: `Failed to start: ${err.message}` });
+    });
+
+    proc.on('close', (code) => {
+      clearTimeout(timeout);
+      if (code !== null && code !== 0 && !stdout) {
+        resolve({
+          connected: false,
+          error: stderr || `Process exited with code ${code}`,
+        });
+      }
+    });
+
+    // Send a basic MCP initialize request to check if it responds
+    const initRequest = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0.0' },
+      },
+    });
+
+    proc.stdin?.write(initRequest + '\n');
+  });
+}
+
+// Helper to test SSE MCP server
+async function testSseMcp(
+  url: string
+): Promise<{ connected: boolean; error?: string; status?: number }> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { Accept: 'text/event-stream' },
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (response.ok) {
+      return { connected: true, status: response.status };
+    } else {
+      return {
+        connected: false,
+        error: `HTTP ${response.status}: ${response.statusText}`,
+        status: response.status,
+      };
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      return { connected: false, error: 'Connection timeout (5s)' };
+    }
+    return {
+      connected: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+}
 
 export default router;

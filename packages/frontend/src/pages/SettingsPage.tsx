@@ -27,6 +27,9 @@ import {
   Palette,
   Wrench,
   KeyRound,
+  Zap,
+  AlertCircle,
+  Loader2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -127,6 +130,9 @@ export function SettingsPage() {
   // Gemini API key state
   const [geminiKeyInput, setGeminiKeyInput] = useState('');
   const [showGeminiKey, setShowGeminiKey] = useState(false);
+
+  // MCP test state
+  const [mcpTestResults, setMcpTestResults] = useState<Record<string, { testing: boolean; connected?: boolean; error?: string }>>({});
 
   // Fetch settings
   const { data: settings, isLoading: settingsLoading } = useQuery({
@@ -281,6 +287,54 @@ export function SettingsPage() {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     },
   });
+
+  // Test MCP server connection
+  const testMcpServer = async (serverId: string) => {
+    setMcpTestResults((prev) => ({
+      ...prev,
+      [serverId]: { testing: true },
+    }));
+
+    try {
+      const response = await api.post<ApiResponse<{ connected: boolean; error?: string }>>(
+        `/api/mcp-servers/${serverId}/test`
+      );
+      const result = response.data.data;
+
+      setMcpTestResults((prev) => ({
+        ...prev,
+        [serverId]: {
+          testing: false,
+          connected: result?.connected,
+          error: result?.error,
+        },
+      }));
+
+      if (result?.connected) {
+        toast({ title: 'Connection successful', description: 'MCP server is responding' });
+      } else {
+        toast({
+          title: 'Connection failed',
+          description: result?.error || 'Could not connect to server',
+          variant: 'destructive',
+        });
+      }
+    } catch (error) {
+      setMcpTestResults((prev) => ({
+        ...prev,
+        [serverId]: {
+          testing: false,
+          connected: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        },
+      }));
+      toast({
+        title: 'Test failed',
+        description: error instanceof Error ? error.message : 'Unknown error',
+        variant: 'destructive',
+      });
+    }
+  };
 
   // Create CLI tool mutation
   const createCliToolMutation = useMutation({
@@ -935,43 +989,87 @@ export function SettingsPage() {
 
           {mcpServers && mcpServers.length > 0 ? (
             <div className="space-y-2">
-              {mcpServers.map((server) => (
-                <div
-                  key={server.id}
-                  className="group flex items-center gap-4 p-4 rounded-xl border bg-card transition-all hover:border-primary/30 hover:shadow-sm"
-                >
-                  <div className={cn(
-                    "p-2.5 rounded-lg transition-colors",
-                    server.type === 'subprocess'
-                      ? "bg-blue-500/10 text-blue-600 dark:text-blue-400"
-                      : "bg-purple-500/10 text-purple-600 dark:text-purple-400"
-                  )}>
-                    <Server className="h-4 w-4" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium">{server.name}</p>
-                    <p className="text-xs text-muted-foreground font-mono truncate">
-                      {server.type === 'subprocess' ? server.command : server.url}
-                    </p>
-                  </div>
-                  <span className={cn(
-                    "px-2.5 py-1 text-xs rounded-full font-medium shrink-0",
-                    server.type === 'subprocess'
-                      ? "bg-blue-500/10 text-blue-600 dark:text-blue-400"
-                      : "bg-purple-500/10 text-purple-600 dark:text-purple-400"
-                  )}>
-                    {server.type.toUpperCase()}
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => deleteMcpMutation.mutate(server.id)}
-                    className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
+              {mcpServers.map((server) => {
+                const testResult = mcpTestResults[server.id];
+                return (
+                  <div
+                    key={server.id}
+                    className={cn(
+                      "group flex items-center gap-4 p-4 rounded-xl border bg-card transition-all hover:border-primary/30 hover:shadow-sm",
+                      testResult?.connected === true && "border-green-500/30",
+                      testResult?.connected === false && "border-red-500/30"
+                    )}
                   >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              ))}
+                    <div className={cn(
+                      "p-2.5 rounded-lg transition-colors",
+                      testResult?.connected === true
+                        ? "bg-green-500/10 text-green-600 dark:text-green-400"
+                        : testResult?.connected === false
+                        ? "bg-red-500/10 text-red-600 dark:text-red-400"
+                        : server.type === 'subprocess'
+                        ? "bg-blue-500/10 text-blue-600 dark:text-blue-400"
+                        : "bg-purple-500/10 text-purple-600 dark:text-purple-400"
+                    )}>
+                      {testResult?.testing ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : testResult?.connected === true ? (
+                        <CheckCircle2 className="h-4 w-4" />
+                      ) : testResult?.connected === false ? (
+                        <AlertCircle className="h-4 w-4" />
+                      ) : (
+                        <Server className="h-4 w-4" />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium">{server.name}</p>
+                        {testResult?.connected === true && (
+                          <span className="text-xs text-green-600 dark:text-green-400">Connected</span>
+                        )}
+                        {testResult?.connected === false && (
+                          <span className="text-xs text-red-600 dark:text-red-400">Failed</span>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground font-mono truncate">
+                        {server.type === 'subprocess' ? server.command : server.url}
+                      </p>
+                      {testResult?.error && (
+                        <p className="text-xs text-red-500 truncate mt-0.5">{testResult.error}</p>
+                      )}
+                    </div>
+                    <span className={cn(
+                      "px-2.5 py-1 text-xs rounded-full font-medium shrink-0",
+                      server.type === 'subprocess'
+                        ? "bg-blue-500/10 text-blue-600 dark:text-blue-400"
+                        : "bg-purple-500/10 text-purple-600 dark:text-purple-400"
+                    )}>
+                      {server.type.toUpperCase()}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => testMcpServer(server.id)}
+                      disabled={testResult?.testing}
+                      className="h-8 px-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      {testResult?.testing ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Zap className="h-4 w-4" />
+                      )}
+                      <span className="ml-1 text-xs">Test</span>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => deleteMcpMutation.mutate(server.id)}
+                      className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                );
+              })}
             </div>
           ) : !showMcpForm && (
             <Card className="border-dashed">
