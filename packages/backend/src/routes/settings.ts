@@ -264,4 +264,125 @@ export function getGeminiApiKeyForUser(userId: string): string | null {
   return null;
 }
 
+// Get GitHub token status (not the actual token)
+router.get('/github-token', requireAuth, (req, res) => {
+  const userId = (req as AuthenticatedRequest).userId;
+  const db = getDatabase();
+
+  const settings = db.prepare(
+    'SELECT settings_json FROM user_settings WHERE user_id = ?'
+  ).get(userId) as { settings_json: string | null } | undefined;
+
+  if (settings?.settings_json) {
+    try {
+      const parsed = JSON.parse(settings.settings_json);
+      if (parsed.githubToken) {
+        res.json({
+          success: true,
+          data: {
+            hasToken: true,
+            tokenPreview: `${parsed.githubToken.substring(0, 8)}...${parsed.githubToken.slice(-4)}`
+          }
+        });
+        return;
+      }
+    } catch {
+      // Invalid JSON, continue
+    }
+  }
+
+  res.json({ success: true, data: { hasToken: false, tokenPreview: null } });
+});
+
+// Set GitHub token
+router.put('/github-token', requireAuth, (req, res) => {
+  const userId = (req as AuthenticatedRequest).userId;
+  const { token } = req.body;
+
+  if (!token || typeof token !== 'string') {
+    throw new AppError('Token is required', 400, 'MISSING_TOKEN');
+  }
+
+  // Validate token format (GitHub PAT starts with ghp_, github_pat_, or is a classic token)
+  if (!token.startsWith('ghp_') && !token.startsWith('github_pat_') && token.length < 20) {
+    throw new AppError('Invalid GitHub token format', 400, 'INVALID_TOKEN');
+  }
+
+  const db = getDatabase();
+
+  // Get existing settings_json
+  const existing = db.prepare(
+    'SELECT settings_json FROM user_settings WHERE user_id = ?'
+  ).get(userId) as { settings_json: string | null } | undefined;
+
+  let settingsObj: Record<string, unknown> = {};
+  if (existing?.settings_json) {
+    try {
+      settingsObj = JSON.parse(existing.settings_json);
+    } catch {
+      // Invalid JSON, start fresh
+    }
+  }
+
+  settingsObj.githubToken = token;
+
+  db.prepare(
+    'UPDATE user_settings SET settings_json = ? WHERE user_id = ?'
+  ).run(JSON.stringify(settingsObj), userId);
+
+  res.json({
+    success: true,
+    data: {
+      hasToken: true,
+      tokenPreview: `${token.substring(0, 8)}...${token.slice(-4)}`
+    }
+  });
+});
+
+// Delete GitHub token
+router.delete('/github-token', requireAuth, (req, res) => {
+  const userId = (req as AuthenticatedRequest).userId;
+  const db = getDatabase();
+
+  // Get existing settings_json
+  const existing = db.prepare(
+    'SELECT settings_json FROM user_settings WHERE user_id = ?'
+  ).get(userId) as { settings_json: string | null } | undefined;
+
+  if (existing?.settings_json) {
+    try {
+      const settingsObj = JSON.parse(existing.settings_json);
+      delete settingsObj.githubToken;
+
+      db.prepare(
+        'UPDATE user_settings SET settings_json = ? WHERE user_id = ?'
+      ).run(JSON.stringify(settingsObj), userId);
+    } catch {
+      // Invalid JSON, just continue
+    }
+  }
+
+  res.json({ success: true });
+});
+
+// Get GitHub token for internal use (returns full token)
+export function getGitHubTokenForUser(userId: string): string | null {
+  const db = getDatabase();
+
+  const settings = db.prepare(
+    'SELECT settings_json FROM user_settings WHERE user_id = ?'
+  ).get(userId) as { settings_json: string | null } | undefined;
+
+  if (settings?.settings_json) {
+    try {
+      const parsed = JSON.parse(settings.settings_json);
+      return parsed.githubToken || null;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
 export default router;

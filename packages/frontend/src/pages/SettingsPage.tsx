@@ -30,6 +30,7 @@ import {
   Zap,
   AlertCircle,
   Loader2,
+  Github,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -131,6 +132,10 @@ export function SettingsPage() {
   const [geminiKeyInput, setGeminiKeyInput] = useState('');
   const [showGeminiKey, setShowGeminiKey] = useState(false);
 
+  // GitHub token state
+  const [githubTokenInput, setGithubTokenInput] = useState('');
+  const [showGithubToken, setShowGithubToken] = useState(false);
+
   // MCP test state
   const [mcpTestResults, setMcpTestResults] = useState<Record<string, { testing: boolean; connected?: boolean; error?: string }>>({});
 
@@ -217,6 +222,15 @@ export function SettingsPage() {
     queryKey: ['gemini-key'],
     queryFn: async () => {
       const response = await api.get<ApiResponse<{ hasKey: boolean; keyPreview: string | null }>>('/api/settings/gemini-key');
+      return response.data.data;
+    },
+  });
+
+  // Fetch GitHub token status
+  const { data: githubTokenStatus, refetch: refetchGithubToken } = useQuery({
+    queryKey: ['github-token'],
+    queryFn: async () => {
+      const response = await api.get<ApiResponse<{ hasToken: boolean; tokenPreview: string | null }>>('/api/settings/github-token');
       return response.data.data;
     },
   });
@@ -467,6 +481,36 @@ export function SettingsPage() {
     onSuccess: () => {
       refetchGeminiKey();
       toast({ title: 'Gemini API key removed' });
+    },
+    onError: (error: Error) => {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    },
+  });
+
+  // Set GitHub token mutation
+  const setGithubTokenMutation = useMutation({
+    mutationFn: async (token: string) => {
+      const response = await api.put<ApiResponse<{ hasToken: boolean; tokenPreview: string }>>('/api/settings/github-token', { token });
+      return response.data.data;
+    },
+    onSuccess: () => {
+      refetchGithubToken();
+      setGithubTokenInput('');
+      toast({ title: 'GitHub token saved' });
+    },
+    onError: (error: Error) => {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    },
+  });
+
+  // Delete GitHub token mutation
+  const deleteGithubTokenMutation = useMutation({
+    mutationFn: async () => {
+      await api.delete('/api/settings/github-token');
+    },
+    onSuccess: () => {
+      refetchGithubToken();
+      toast({ title: 'GitHub token removed' });
     },
     onError: (error: Error) => {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
@@ -899,6 +943,96 @@ export function SettingsPage() {
               )}
             </CardContent>
           </Card>
+            </section>
+
+            {/* GitHub Token */}
+            <section>
+              <div className="flex items-center gap-2 mb-3">
+                <h2 className="text-lg font-semibold">GitHub Token</h2>
+                <Github className="h-4 w-4 text-gray-500" />
+              </div>
+              <Card className={cn(
+                "border",
+                githubTokenStatus?.hasToken
+                  ? "border-green-500/30 bg-green-500/5"
+                  : "border-gray-500/30 bg-gray-500/5"
+              )}>
+                <CardContent className="pt-4 pb-4">
+                  {githubTokenStatus?.hasToken ? (
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-lg bg-green-500/15">
+                        <Github className="h-4 w-4 text-green-600 dark:text-green-400" />
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-green-600 dark:text-green-400">Token configured</p>
+                        <p className="text-xs text-muted-foreground font-mono">{githubTokenStatus.tokenPreview}</p>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => deleteGithubTokenMutation.mutate()}
+                        disabled={deleteGithubTokenMutation.isPending}
+                        className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                      >
+                        <Trash2 className="h-4 w-4 mr-1" />
+                        Remove
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2 rounded-lg bg-gray-500/15">
+                          <Github className="h-4 w-4 text-gray-600 dark:text-gray-400" />
+                        </div>
+                        <div className="flex-1">
+                          <p className="text-sm font-medium text-gray-600 dark:text-gray-400">No token set</p>
+                          <p className="text-xs text-muted-foreground">Required for GitHub integration features</p>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <div className="relative flex-1">
+                          <Input
+                            type={showGithubToken ? 'text' : 'password'}
+                            value={githubTokenInput}
+                            onChange={(e) => setGithubTokenInput(e.target.value)}
+                            placeholder="ghp_..."
+                            className="font-mono text-sm pr-10"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowGithubToken(!showGithubToken)}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-muted"
+                          >
+                            {showGithubToken ? (
+                              <EyeOff className="h-4 w-4 text-muted-foreground" />
+                            ) : (
+                              <Eye className="h-4 w-4 text-muted-foreground" />
+                            )}
+                          </button>
+                        </div>
+                        <Button
+                          onClick={() => setGithubTokenMutation.mutate(githubTokenInput)}
+                          disabled={!githubTokenInput || setGithubTokenMutation.isPending}
+                        >
+                          {setGithubTokenMutation.isPending ? 'Saving...' : 'Save'}
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Get a Personal Access Token from{' '}
+                        <a
+                          href="https://github.com/settings/tokens/new"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-primary hover:underline"
+                        >
+                          GitHub Settings
+                        </a>
+                        {' '}(scopes: repo, read:user)
+                      </p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             </section>
           </TabsContent>
 
