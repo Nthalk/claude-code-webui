@@ -40,14 +40,29 @@ export class GeminiImageGenerator {
   private outputDir: string;
   private apiKey?: string;
 
-  constructor(outputDir: string) {
+  constructor(outputDir: string, apiKey?: string) {
     this.outputDir = outputDir;
-    this.apiKey = process.env.GEMINI_API_KEY;
+    // Use provided API key, fall back to environment variable
+    this.apiKey = apiKey || process.env.GEMINI_API_KEY;
 
     // Ensure output directory exists
     if (!fs.existsSync(this.outputDir)) {
       fs.mkdirSync(this.outputDir, { recursive: true });
     }
+  }
+
+  /**
+   * Update the API key (useful when key is loaded from database)
+   */
+  setApiKey(apiKey: string | undefined): void {
+    this.apiKey = apiKey;
+  }
+
+  /**
+   * Check if an API key is configured
+   */
+  hasApiKey(): boolean {
+    return !!this.apiKey;
   }
 
   /**
@@ -92,7 +107,7 @@ export class GeminiImageGenerator {
       } else {
         return {
           success: false,
-          error: 'No API key or OAuth token available. Set GEMINI_API_KEY or login with gemini CLI.',
+          error: 'No API key or OAuth token available. Set your Gemini API key in Settings or login with gemini CLI.',
         };
       }
     } else {
@@ -194,7 +209,7 @@ export class GeminiImageGenerator {
     if (!this.apiKey) {
       return {
         success: false,
-        error: 'Imagen requires an API key. Set GEMINI_API_KEY environment variable.',
+        error: 'Imagen requires an API key. Set your Gemini API key in Settings.',
       };
     }
 

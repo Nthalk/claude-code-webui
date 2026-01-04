@@ -16,8 +16,8 @@ services:
       - ALLOWED_BASE_PATHS=/mnt/user
       # Set your email here for display in the UI
       - CLAUDE_USER_EMAIL=${CLAUDE_USER_EMAIL:-}
-      # Gemini API Key for image generation
-      - GEMINI_API_KEY=AIzaSyCuBuCa6ZSVt5KZgl55Wk_F1DJSgfbTxHY
+      # Gemini API Key for image generation (set in .env file or environment)
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
     volumes:
       # Persist database
       - ./data:/app/packages/backend/data

@@ -20,6 +20,10 @@ import {
   ToggleRight,
   Puzzle,
   Store,
+  Key,
+  Eye,
+  EyeOff,
+  Sparkles,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -116,6 +120,10 @@ export function SettingsPage() {
   // Marketplace browser state
   const [marketplaceBrowserOpen, setMarketplaceBrowserOpen] = useState(false);
 
+  // Gemini API key state
+  const [geminiKeyInput, setGeminiKeyInput] = useState('');
+  const [showGeminiKey, setShowGeminiKey] = useState(false);
+
   // Fetch settings
   const { data: settings, isLoading: settingsLoading } = useQuery({
     queryKey: ['settings'],
@@ -191,6 +199,15 @@ export function SettingsPage() {
         plugins?: { name: string; description: string; version: string }[];
       }[]>>('/api/claude-config/marketplaces');
       return response.data.data || [];
+    },
+  });
+
+  // Fetch Gemini API key status
+  const { data: geminiKeyStatus, refetch: refetchGeminiKey } = useQuery({
+    queryKey: ['gemini-key'],
+    queryFn: async () => {
+      const response = await api.get<ApiResponse<{ hasKey: boolean; keyPreview: string | null }>>('/api/settings/gemini-key');
+      return response.data.data;
     },
   });
 
@@ -362,6 +379,36 @@ export function SettingsPage() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['installed-plugins'] });
       toast({ title: data?.enabled ? 'Plugin enabled' : 'Plugin disabled' });
+    },
+    onError: (error: Error) => {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    },
+  });
+
+  // Set Gemini API key mutation
+  const setGeminiKeyMutation = useMutation({
+    mutationFn: async (apiKey: string) => {
+      const response = await api.put<ApiResponse<{ hasKey: boolean; keyPreview: string }>>('/api/settings/gemini-key', { apiKey });
+      return response.data.data;
+    },
+    onSuccess: () => {
+      refetchGeminiKey();
+      setGeminiKeyInput('');
+      toast({ title: 'Gemini API key saved' });
+    },
+    onError: (error: Error) => {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    },
+  });
+
+  // Delete Gemini API key mutation
+  const deleteGeminiKeyMutation = useMutation({
+    mutationFn: async () => {
+      await api.delete('/api/settings/gemini-key');
+    },
+    onSuccess: () => {
+      refetchGeminiKey();
+      toast({ title: 'Gemini API key removed' });
     },
     onError: (error: Error) => {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
@@ -641,6 +688,95 @@ export function SettingsPage() {
               <FolderSearch className="h-4 w-4" />
             </Button>
           </div>
+        </section>
+
+        {/* Gemini API Key */}
+        <section>
+          <div className="flex items-center gap-2 mb-3">
+            <h2 className="text-lg font-semibold">Gemini API Key</h2>
+            <Sparkles className="h-4 w-4 text-amber-500" />
+          </div>
+          <Card className={cn(
+            "border",
+            geminiKeyStatus?.hasKey
+              ? "border-green-500/30 bg-green-500/5"
+              : "border-amber-500/30 bg-amber-500/5"
+          )}>
+            <CardContent className="pt-4 pb-4">
+              {geminiKeyStatus?.hasKey ? (
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg bg-green-500/15">
+                    <Key className="h-4 w-4 text-green-600 dark:text-green-400" />
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-green-600 dark:text-green-400">API Key configured</p>
+                    <p className="text-xs text-muted-foreground font-mono">{geminiKeyStatus.keyPreview}</p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => deleteGeminiKeyMutation.mutate()}
+                    disabled={deleteGeminiKeyMutation.isPending}
+                    className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                  >
+                    <Trash2 className="h-4 w-4 mr-1" />
+                    Remove
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-lg bg-amber-500/15">
+                      <Key className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-amber-600 dark:text-amber-400">No API key set</p>
+                      <p className="text-xs text-muted-foreground">Required for Gemini image generation</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Input
+                        type={showGeminiKey ? 'text' : 'password'}
+                        value={geminiKeyInput}
+                        onChange={(e) => setGeminiKeyInput(e.target.value)}
+                        placeholder="AIzaSy..."
+                        className="font-mono text-sm pr-10"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowGeminiKey(!showGeminiKey)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-muted"
+                      >
+                        {showGeminiKey ? (
+                          <EyeOff className="h-4 w-4 text-muted-foreground" />
+                        ) : (
+                          <Eye className="h-4 w-4 text-muted-foreground" />
+                        )}
+                      </button>
+                    </div>
+                    <Button
+                      onClick={() => setGeminiKeyMutation.mutate(geminiKeyInput)}
+                      disabled={!geminiKeyInput || setGeminiKeyMutation.isPending}
+                    >
+                      {setGeminiKeyMutation.isPending ? 'Saving...' : 'Save'}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Get your API key from{' '}
+                    <a
+                      href="https://aistudio.google.com/apikey"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      Google AI Studio
+                    </a>
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </section>
 
         {/* Folder Browser Dialog */}

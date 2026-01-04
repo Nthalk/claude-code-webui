@@ -9,6 +9,7 @@ import {
   SocketData,
 } from '@claude-code-webui/shared';
 import { GeminiImageGenerator } from './ImageGenerator';
+import { getGeminiApiKeyForUser } from '../../routes/settings';
 
 interface GeminiImageResult {
   success: boolean;
@@ -21,7 +22,6 @@ interface GeminiImageResult {
 export class GeminiService {
   private io: Server<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>;
   private outputDir: string;
-  private imageGenerator: GeminiImageGenerator;
 
   constructor(
     io: Server<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>
@@ -33,9 +33,18 @@ export class GeminiService {
     if (!fs.existsSync(this.outputDir)) {
       fs.mkdirSync(this.outputDir, { recursive: true });
     }
+  }
 
-    // Initialize image generator
-    this.imageGenerator = new GeminiImageGenerator(this.outputDir);
+  /**
+   * Get image generator with user's API key
+   */
+  private getImageGenerator(userId?: string): GeminiImageGenerator {
+    // Try to get user-specific API key from database
+    let apiKey: string | undefined;
+    if (userId) {
+      apiKey = getGeminiApiKeyForUser(userId) || undefined;
+    }
+    return new GeminiImageGenerator(this.outputDir, apiKey);
   }
 
   /**
@@ -47,6 +56,7 @@ export class GeminiService {
     options: {
       model?: 'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview' | 'imagen';
       referenceImages?: string[];
+      userId?: string;
     } = {}
   ): Promise<GeminiImageResult> {
     // Emit status update
@@ -58,14 +68,16 @@ export class GeminiService {
     });
 
     try {
+      // Get image generator with user's API key
+      const imageGenerator = this.getImageGenerator(options.userId);
       let result: GeminiImageResult;
 
       // Use Imagen if specifically requested and API key available
-      if (options.model === 'imagen' && process.env.GEMINI_API_KEY) {
-        result = await this.imageGenerator.generateWithImagen(prompt);
+      if (options.model === 'imagen' && imageGenerator.hasApiKey()) {
+        result = await imageGenerator.generateWithImagen(prompt);
       } else {
         // Use Gemini Flash Image (works with OAuth or API key)
-        result = await this.imageGenerator.generateImage(prompt);
+        result = await imageGenerator.generateImage(prompt);
       }
 
       // Emit completion

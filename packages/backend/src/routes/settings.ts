@@ -143,4 +143,125 @@ router.delete('/api-key', requireAuth, (req, res) => {
   res.json({ success: true });
 });
 
+// Get Gemini API key status (not the actual key)
+router.get('/gemini-key', requireAuth, (req, res) => {
+  const userId = (req as AuthenticatedRequest).userId;
+  const db = getDatabase();
+
+  const settings = db.prepare(
+    'SELECT settings_json FROM user_settings WHERE user_id = ?'
+  ).get(userId) as { settings_json: string | null } | undefined;
+
+  if (settings?.settings_json) {
+    try {
+      const parsed = JSON.parse(settings.settings_json);
+      res.json({
+        success: true,
+        data: {
+          hasKey: !!parsed.geminiApiKey,
+          keyPreview: parsed.geminiApiKey
+            ? `${parsed.geminiApiKey.substring(0, 10)}...${parsed.geminiApiKey.slice(-4)}`
+            : null
+        }
+      });
+      return;
+    } catch {
+      // Invalid JSON, continue
+    }
+  }
+
+  res.json({ success: true, data: { hasKey: false, keyPreview: null } });
+});
+
+// Set Gemini API key
+router.put('/gemini-key', requireAuth, (req, res) => {
+  const userId = (req as AuthenticatedRequest).userId;
+  const { apiKey } = req.body;
+
+  if (!apiKey || typeof apiKey !== 'string') {
+    throw new AppError('API key is required', 400, 'MISSING_API_KEY');
+  }
+
+  // Validate key format (Google API keys start with AIza)
+  if (!apiKey.startsWith('AIza')) {
+    throw new AppError('Invalid Gemini API key format', 400, 'INVALID_API_KEY');
+  }
+
+  const db = getDatabase();
+
+  // Get existing settings_json
+  const existing = db.prepare(
+    'SELECT settings_json FROM user_settings WHERE user_id = ?'
+  ).get(userId) as { settings_json: string | null } | undefined;
+
+  let settingsObj: Record<string, unknown> = {};
+  if (existing?.settings_json) {
+    try {
+      settingsObj = JSON.parse(existing.settings_json);
+    } catch {
+      // Invalid JSON, start fresh
+    }
+  }
+
+  settingsObj.geminiApiKey = apiKey;
+
+  db.prepare(
+    'UPDATE user_settings SET settings_json = ? WHERE user_id = ?'
+  ).run(JSON.stringify(settingsObj), userId);
+
+  res.json({
+    success: true,
+    data: {
+      hasKey: true,
+      keyPreview: `${apiKey.substring(0, 10)}...${apiKey.slice(-4)}`
+    }
+  });
+});
+
+// Delete Gemini API key
+router.delete('/gemini-key', requireAuth, (req, res) => {
+  const userId = (req as AuthenticatedRequest).userId;
+  const db = getDatabase();
+
+  // Get existing settings_json
+  const existing = db.prepare(
+    'SELECT settings_json FROM user_settings WHERE user_id = ?'
+  ).get(userId) as { settings_json: string | null } | undefined;
+
+  if (existing?.settings_json) {
+    try {
+      const settingsObj = JSON.parse(existing.settings_json);
+      delete settingsObj.geminiApiKey;
+
+      db.prepare(
+        'UPDATE user_settings SET settings_json = ? WHERE user_id = ?'
+      ).run(JSON.stringify(settingsObj), userId);
+    } catch {
+      // Invalid JSON, just continue
+    }
+  }
+
+  res.json({ success: true });
+});
+
+// Get Gemini API key for internal use (returns full key)
+export function getGeminiApiKeyForUser(userId: string): string | null {
+  const db = getDatabase();
+
+  const settings = db.prepare(
+    'SELECT settings_json FROM user_settings WHERE user_id = ?'
+  ).get(userId) as { settings_json: string | null } | undefined;
+
+  if (settings?.settings_json) {
+    try {
+      const parsed = JSON.parse(settings.settings_json);
+      return parsed.geminiApiKey || null;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
 export default router;

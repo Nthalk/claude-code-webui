@@ -128,6 +128,7 @@ export function setupWebSocket(httpServer: HttpServer): Server {
         const result = await geminiService.generateImage(sessionId, prompt, {
           model,
           referenceImages,
+          userId: socket.data.userId,
         });
 
         if (result.success && result.imagePath) {
