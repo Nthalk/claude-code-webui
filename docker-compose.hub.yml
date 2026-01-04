@@ -7,7 +7,7 @@
 
 services:
   claude-code-webui:
-    image: zwaetschge/claude-code-webui:latest
+    image: valentin2177/claude-code-webui:latest
     container_name: claude-code-webui
     restart: unless-stopped
     ports:

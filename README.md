@@ -5,7 +5,7 @@ A powerful web-based interface for Claude Code CLI with rich features for develo
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-18.3-blue.svg)](https://react.dev/)
-[![Docker Hub](https://img.shields.io/docker/v/zwaetschge/claude-code-webui?label=Docker%20Hub&logo=docker)](https://hub.docker.com/r/zwaetschge/claude-code-webui)
+[![Docker Hub](https://img.shields.io/docker/v/valentin2177/claude-code-webui?label=Docker%20Hub&logo=docker)](https://hub.docker.com/r/valentin2177/claude-code-webui)
 
 ## Features
 
