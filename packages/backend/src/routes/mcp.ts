@@ -250,14 +250,13 @@ async function testSubprocessMcp(
   args: string[]
 ): Promise<{ connected: boolean; error?: string; output?: string }> {
   return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      proc.kill();
-      resolve({ connected: false, error: 'Connection timeout (5s)' });
-    }, 5000);
-
     // Parse command - might be "npx something" or just "something"
     const parts = command.split(/\s+/);
     const cmd = parts[0];
+    if (!cmd) {
+      resolve({ connected: false, error: 'Invalid command' });
+      return;
+    }
     const cmdArgs = [...parts.slice(1), ...args];
 
     const proc = spawn(cmd, cmdArgs, {
@@ -265,10 +264,15 @@ async function testSubprocessMcp(
       env: { ...process.env },
     });
 
+    const timeout = setTimeout(() => {
+      proc.kill();
+      resolve({ connected: false, error: 'Connection timeout (5s)' });
+    }, 5000);
+
     let stdout = '';
     let stderr = '';
 
-    proc.stdout?.on('data', (data) => {
+    proc.stdout?.on('data', (data: Buffer) => {
       stdout += data.toString();
       // If we get any output, the server started successfully
       clearTimeout(timeout);
@@ -276,16 +280,16 @@ async function testSubprocessMcp(
       resolve({ connected: true, output: stdout.substring(0, 200) });
     });
 
-    proc.stderr?.on('data', (data) => {
+    proc.stderr?.on('data', (data: Buffer) => {
       stderr += data.toString();
     });
 
-    proc.on('error', (err) => {
+    proc.on('error', (err: Error) => {
       clearTimeout(timeout);
       resolve({ connected: false, error: `Failed to start: ${err.message}` });
     });
 
-    proc.on('close', (code) => {
+    proc.on('close', (code: number | null) => {
       clearTimeout(timeout);
       if (code !== null && code !== 0 && !stdout) {
         resolve({

@@ -122,12 +122,12 @@ export class CommandService {
     // Parse YAML frontmatter
     const frontmatterMatch = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
 
-    if (frontmatterMatch) {
+    if (frontmatterMatch && frontmatterMatch[1] && frontmatterMatch[2]) {
       const yamlContent = frontmatterMatch[1];
       const templateContent = frontmatterMatch[2].trim();
 
       // Simple YAML parsing for our use case
-      const description = this.extractYamlValue(yamlContent, 'description') || `Custom command: ${name}`;
+      const description = this.extractYamlValue(yamlContent, 'description') ?? `Custom command: ${name}`;
       const argsStr = this.extractYamlValue(yamlContent, 'arguments');
       const args = argsStr ? this.parseYamlArray(argsStr) : [];
 
@@ -155,13 +155,13 @@ export class CommandService {
   private extractYamlValue(yaml: string, key: string): string | null {
     const regex = new RegExp(`^${key}:\\s*(.+)$`, 'm');
     const match = yaml.match(regex);
-    return match ? match[1].trim().replace(/^["']|["']$/g, '') : null;
+    return match && match[1] ? match[1].trim().replace(/^["']|["']$/g, '') : null;
   }
 
   // Parse a YAML array (simple format: ["a", "b"])
   private parseYamlArray(str: string): string[] {
     const match = str.match(/^\[(.+)\]$/);
-    if (!match) return [];
+    if (!match || !match[1]) return [];
     return match[1].split(',').map(s => s.trim().replace(/^["']|["']$/g, ''));
   }
 
@@ -297,7 +297,10 @@ export class CommandService {
 
     // Replace $1, $2, etc. with individual args
     for (let i = 0; i < args.length; i++) {
-      result = result.replace(new RegExp(`\\$${i + 1}`, 'g'), args[i]);
+      const arg = args[i];
+      if (arg !== undefined) {
+        result = result.replace(new RegExp(`\\$${i + 1}`, 'g'), arg);
+      }
     }
 
     // Clean up any remaining placeholders
@@ -313,7 +316,9 @@ export class CommandService {
     let match;
 
     while ((match = fileRefRegex.exec(text)) !== null) {
-      const filePath = join(workingDirectory, match[1]);
+      const fileName = match[1];
+      if (!fileName) continue;
+      const filePath = join(workingDirectory, fileName);
       try {
         const content = await readFile(filePath, 'utf-8');
         result = result.replace(match[0], `\n\`\`\`\n${content}\n\`\`\`\n`);

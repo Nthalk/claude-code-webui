@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, Settings, Plus, FolderOpen, LogOut, User } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Settings, Plus, FolderOpen, LogOut, User, Star } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -27,9 +27,17 @@ export function Sidebar({ onNavigate, mobile }: SidebarProps) {
   const { sessions } = useSessionStore();
   const { user, logout } = useAuthStore();
   const [collapsed, setCollapsed] = useState(false);
+  const [showStarredOnly, setShowStarredOnly] = useState(false);
 
   // On mobile, never collapse (full width in sheet)
   const isCollapsed = mobile ? false : collapsed;
+
+  // Filter sessions based on starred filter
+  const filteredSessions = showStarredOnly
+    ? sessions.filter(s => s.starred)
+    : sessions;
+
+  const starredCount = sessions.filter(s => s.starred).length;
 
   const handleLinkClick = () => {
     if (onNavigate) {
@@ -121,9 +129,26 @@ export function Sidebar({ onNavigate, mobile }: SidebarProps) {
             isCollapsed ? "justify-center" : "justify-between"
           )}>
             {!isCollapsed && (
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Sessions
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Sessions
+                </span>
+                {/* Starred filter toggle */}
+                {starredCount > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={cn(
+                      "h-5 w-5 rounded-md",
+                      showStarredOnly && "bg-amber-500/10 text-amber-500"
+                    )}
+                    onClick={() => setShowStarredOnly(!showStarredOnly)}
+                    title={showStarredOnly ? "Show all sessions" : "Show starred only"}
+                  >
+                    <Star className={cn("h-3 w-3", showStarredOnly && "fill-amber-500")} />
+                  </Button>
+                )}
+              </div>
             )}
             <Button
               variant="ghost"
@@ -139,14 +164,26 @@ export function Sidebar({ onNavigate, mobile }: SidebarProps) {
           </div>
 
           <div className="space-y-1 mt-1">
-            {sessions.length === 0 ? (
+            {filteredSessions.length === 0 ? (
               !isCollapsed && (
                 <div className="px-3 py-4 text-center">
-                  <p className="text-xs text-muted-foreground/70">No sessions</p>
+                  <p className="text-xs text-muted-foreground/70">
+                    {showStarredOnly ? "No starred sessions" : "No sessions"}
+                  </p>
+                  {showStarredOnly && sessions.length > 0 && (
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="text-xs mt-1 h-auto p-0"
+                      onClick={() => setShowStarredOnly(false)}
+                    >
+                      Show all sessions
+                    </Button>
+                  )}
                 </div>
               )
             ) : (
-              sessions.slice(0, mobile ? 20 : 10).map((session) => {
+              filteredSessions.slice(0, mobile ? 20 : 10).map((session) => {
                 const isActive = location.pathname === `/session/${session.id}`;
 
                 return (
@@ -176,7 +213,10 @@ export function Sidebar({ onNavigate, mobile }: SidebarProps) {
                     </div>
                     {!isCollapsed && (
                       <div className="flex-1 min-w-0">
-                        <div className="truncate font-medium text-sm">{session.name}</div>
+                        <div className="flex items-center gap-1.5 truncate font-medium text-sm">
+                          {session.starred && <Star className="h-3 w-3 text-amber-500 fill-amber-500 shrink-0" />}
+                          <span className="truncate">{session.name}</span>
+                        </div>
                         <div className="flex items-center gap-1 text-[10px] opacity-60">
                           <FolderOpen className="h-2.5 w-2.5" />
                           <span className="truncate">{session.workingDirectory.split('/').pop()}</span>

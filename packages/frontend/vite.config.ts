@@ -9,6 +9,34 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // Core React dependencies
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+          // UI framework (Radix UI components)
+          'vendor-radix': [
+            '@radix-ui/react-dialog',
+            '@radix-ui/react-dropdown-menu',
+            '@radix-ui/react-select',
+            '@radix-ui/react-tabs',
+            '@radix-ui/react-toast',
+            '@radix-ui/react-tooltip',
+            '@radix-ui/react-scroll-area',
+          ],
+          // Monaco editor (largest dependency)
+          'vendor-monaco': ['@monaco-editor/react'],
+          // Data fetching and state management
+          'vendor-data': ['@tanstack/react-query', 'zustand', 'socket.io-client'],
+          // Markdown and syntax highlighting
+          'vendor-markdown': ['react-markdown', 'react-syntax-highlighter'],
+          // Math rendering (KaTeX)
+          'vendor-katex': ['katex', 'remark-math', 'rehype-katex'],
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {

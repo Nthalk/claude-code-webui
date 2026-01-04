@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { Send, Square, FolderOpen, Image, X, Paperclip, CheckCircle2, Brain, Wrench, FileText, Terminal, Search, Edit3, Globe, ListTodo, Circle, CheckCircle, Loader2, ChevronRight, ChevronDown, PanelLeftClose, PanelLeft, GitBranch, MessageSquare, Code2 } from 'lucide-react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Send, Square, FolderOpen, Image, X, Paperclip, CheckCircle2, Brain, Wrench, FileText, Terminal, Search, Edit3, Globe, ListTodo, Circle, CheckCircle, Loader2, ChevronRight, ChevronDown, PanelLeftClose, PanelLeft, GitBranch, MessageSquare, Code2, Star } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { StreamingContent } from '@/components/chat/StreamingContent';
@@ -10,6 +13,7 @@ import { SessionControls } from '@/components/session/SessionControls';
 import { FileTree } from '@/components/file-tree';
 import { GitPanel } from '@/components/git-panel';
 import { EditorPanel } from '@/components/code-editor';
+import { MobileBottomNav, type MobileView } from '@/components/mobile';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
 import { api } from '@/services/api';
@@ -17,6 +21,8 @@ import { socketService } from '@/services/socket';
 import type { Session, Message, ApiResponse, MessageImage, CliTool, CliToolExecution, Command, CommandExecutionResult } from '@claude-code-webui/shared';
 import { cn } from '@/lib/utils';
 import { CommandMenu } from '@/components/chat/CommandMenu';
+import { InteractiveOptions, detectOptions, isChoicePrompt } from '@/components/chat/InteractiveOptions';
+import { useDocumentSwipeGesture } from '@/hooks';
 
 type SessionMode = 'planning' | 'auto-accept' | 'manual' | 'danger';
 
@@ -49,8 +55,46 @@ export function SessionPage() {
   const cliToolAbortRef = useRef<AbortController | null>(null);
   const [showCommandMenu, setShowCommandMenu] = useState(false);
   const [commandMenuIndex, setCommandMenuIndex] = useState(0);
+  const [mobileView, setMobileView] = useState<MobileView>('chat');
 
   const { usage, addMessage } = useSessionStore();
+
+  // Mobile swipe gesture navigation
+  const mobileViewOrder = useMemo((): MobileView[] => {
+    const views: MobileView[] = ['files', 'chat', 'git'];
+    return views;
+  }, []);
+
+  const handleSwipeLeft = useCallback(() => {
+    // Only work on mobile (screen width < 768px)
+    if (window.innerWidth >= 768) return;
+
+    const currentIndex = mobileViewOrder.indexOf(mobileView);
+    const nextView = mobileViewOrder[currentIndex + 1];
+    if (currentIndex < mobileViewOrder.length - 1 && nextView) {
+      setMobileView(nextView);
+    }
+  }, [mobileView, mobileViewOrder]);
+
+  const handleSwipeRight = useCallback(() => {
+    // Only work on mobile (screen width < 768px)
+    if (window.innerWidth >= 768) return;
+
+    const currentIndex = mobileViewOrder.indexOf(mobileView);
+    const prevView = mobileViewOrder[currentIndex - 1];
+    if (currentIndex > 0 && prevView) {
+      setMobileView(prevView);
+    }
+  }, [mobileView, mobileViewOrder]);
+
+  // Set up edge swipe gestures for mobile navigation
+  useDocumentSwipeGesture({
+    onSwipeLeft: handleSwipeLeft,
+    onSwipeRight: handleSwipeRight,
+    threshold: 50,
+    velocityThreshold: 0.25,
+    enabled: true,
+  });
 
   // Fetch available CLI tools
   const { data: cliTools } = useQuery({
@@ -201,6 +245,20 @@ export function SessionPage() {
     enabled: !!session,
   });
 
+  const queryClient = useQueryClient();
+
+  // Star/unstar session mutation
+  const starMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.patch<ApiResponse<{ starred: boolean }>>(`/api/sessions/${id}/star`);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['session', id] });
+      queryClient.invalidateQueries({ queryKey: ['sessions'] });
+    },
+  });
+
   // Connect to socket and subscribe to session (with reconnect support)
   useEffect(() => {
     if (!id) return;
@@ -274,6 +332,21 @@ export function SessionPage() {
     document.addEventListener('paste', handlePaste);
     return () => document.removeEventListener('paste', handlePaste);
   }, [attachments]);
+
+  // Sync mobile view with right panel tab
+  useEffect(() => {
+    if (mobileView === 'git') {
+      setRightPanelTab('git');
+      setShowTodos(true);
+    } else if (mobileView === 'todos') {
+      setRightPanelTab('todos');
+      setShowTodos(true);
+    } else if (mobileView === 'editor') {
+      setMainView('editor');
+    } else if (mobileView === 'chat') {
+      setMainView('chat');
+    }
+  }, [mobileView]);
 
   const addImages = useCallback((files: File[]) => {
     const imageFiles = files.filter(file => file.type.startsWith('image/'));
@@ -513,6 +586,21 @@ export function SessionPage() {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-xl font-bold flex items-center gap-2">
+              <button
+                onClick={() => starMutation.mutate()}
+                disabled={starMutation.isPending}
+                className="hover:scale-110 transition-transform"
+                title={session.starred ? 'Unstar session' : 'Star session'}
+              >
+                <Star
+                  className={cn(
+                    'h-5 w-5 transition-colors',
+                    session.starred
+                      ? 'text-amber-500 fill-amber-500'
+                      : 'text-muted-foreground hover:text-amber-400'
+                  )}
+                />
+              </button>
               {session.name}
               <span
                 className={cn(
@@ -590,10 +678,13 @@ export function SessionPage() {
 
       {/* Main content area with file tree and todos sidebars */}
       <div className="flex-1 min-h-0 flex gap-4">
-        {/* File Tree Sidebar - Left */}
+        {/* File Tree Sidebar - Left (hidden on mobile, controlled by mobileView) */}
         <div className={cn(
           "shrink-0 transition-all duration-200 border-r",
-          showFileTree ? "w-72" : "w-10"
+          showFileTree ? "w-72" : "w-10",
+          // Mobile: hide unless mobileView is 'files'
+          mobileView !== 'files' && "hidden md:block",
+          mobileView === 'files' && "md:block w-full md:w-72"
         )}>
           {showFileTree ? (
             <div className="h-full flex flex-col">
@@ -633,11 +724,13 @@ export function SessionPage() {
           )}
         </div>
 
-        {/* Main Content - Chat or Editor */}
+        {/* Main Content - Chat or Editor (hidden on mobile for files/git/todos views) */}
         <div className={cn(
           "flex-1 min-h-0",
           mainView === 'chat' && "overflow-auto space-y-4 pb-4",
-          showTodos && "pr-4"
+          showTodos && "pr-4",
+          // Mobile: hide for files, git, todos views
+          (mobileView === 'files' || mobileView === 'git' || mobileView === 'todos') && "hidden md:block"
         )}>
         {mainView === 'editor' ? (
           <EditorPanel sessionId={id || ''} />
@@ -696,8 +789,23 @@ export function SessionPage() {
                     'prose prose-sm max-w-none',
                     message.role === 'user' ? 'prose-invert' : 'dark:prose-invert'
                   )}>
-                    <ReactMarkdown>{message.content}</ReactMarkdown>
+                    <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{message.content}</ReactMarkdown>
                   </div>
+                  {/* Interactive options for assistant messages with choices */}
+                  {message.role === 'assistant' && isChoicePrompt(message.content) && (() => {
+                    const options = detectOptions(message.content);
+                    return options ? (
+                      <InteractiveOptions
+                        options={options}
+                        onSelect={(selected) => {
+                          if (id) {
+                            socketService.sendMessage(id, selected);
+                          }
+                        }}
+                        disabled={session.status !== 'running'}
+                      />
+                    ) : null;
+                  })()}
                 </Card>
               </div>
             );
@@ -824,10 +932,13 @@ export function SessionPage() {
         )}
         </div>
 
-        {/* Right Sidebar - Todos & Git */}
+        {/* Right Sidebar - Todos & Git (hidden on mobile unless mobileView is 'git' or 'todos') */}
         <div className={cn(
           "shrink-0 transition-all duration-200",
-          showTodos ? "w-72" : "w-10"
+          showTodos ? "w-72" : "w-10",
+          // Mobile: hide unless mobileView is 'git' or 'todos'
+          (mobileView !== 'git' && mobileView !== 'todos') && "hidden md:block",
+          (mobileView === 'git' || mobileView === 'todos') && "md:block w-full md:w-72"
         )}>
           <Card className="h-full flex flex-col bg-card/50 backdrop-blur-sm border">
             {/* Sidebar Header with Tabs */}
@@ -1106,6 +1217,19 @@ export function SessionPage() {
           </Button>
         </form>
       </div>
+
+      {/* Mobile Bottom Navigation */}
+      <MobileBottomNav
+        activeView={mobileView}
+        onViewChange={setMobileView}
+        hasOpenFiles={hasOpenFiles}
+        hasTodos={showTodos}
+        changesCount={0}
+        todosCount={currentTodos.length}
+      />
+
+      {/* Mobile padding for bottom nav */}
+      <div className="md:hidden h-14" />
     </div>
   );
 }

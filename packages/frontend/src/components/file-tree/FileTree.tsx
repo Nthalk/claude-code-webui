@@ -8,6 +8,9 @@ import {
   FolderTree,
   Loader2,
   X,
+  List,
+  LayoutList,
+  Table2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -29,6 +32,35 @@ interface TreeState {
   expanded: Record<string, boolean>;
   loading: Record<string, boolean>;
   children: Record<string, FileInfo[]>;
+}
+
+type ViewMode = 'simple' | 'compact' | 'detailed';
+
+// Format file size
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+// Format date
+function formatDate(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diff = now.getTime() - date.getTime();
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+
+  if (days === 0) {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } else if (days === 1) {
+    return 'Yesterday';
+  } else if (days < 7) {
+    return `${days}d ago`;
+  } else {
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
 }
 
 // Directories to exclude from tree
@@ -53,11 +85,21 @@ export function FileTree({
   className,
 }: FileTreeProps) {
   const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState<ViewMode>('simple');
   const [treeState, setTreeState] = useState<TreeState>({
     expanded: { [workingDirectory]: true },
     loading: {},
     children: {},
   });
+
+  // Cycle through view modes
+  const cycleViewMode = useCallback(() => {
+    setViewMode(prev => {
+      if (prev === 'simple') return 'compact';
+      if (prev === 'compact') return 'detailed';
+      return 'simple';
+    });
+  }, []);
 
   // Fetch root directory contents
   const { data: rootFiles, isLoading: rootLoading, refetch } = useQuery({
@@ -255,10 +297,29 @@ export function FileTree({
             className="h-4 w-4 shrink-0"
           />
 
-          {/* Filename with search highlight */}
-          <span className="text-sm truncate flex-1">
-            {searchQuery ? highlightMatch(file.name, searchQuery) : file.name}
-          </span>
+          {/* Filename with search highlight and metadata */}
+          <div className="flex-1 min-w-0 flex items-center gap-2">
+            <span className="text-sm truncate">
+              {searchQuery ? highlightMatch(file.name, searchQuery) : file.name}
+            </span>
+            {/* Compact mode: show size for files */}
+            {viewMode === 'compact' && !isDirectory && file.size > 0 && (
+              <span className="text-[10px] text-muted-foreground shrink-0">
+                {formatFileSize(file.size)}
+              </span>
+            )}
+            {/* Detailed mode: show size and date */}
+            {viewMode === 'detailed' && (
+              <div className="flex items-center gap-2 text-[10px] text-muted-foreground shrink-0 ml-auto">
+                {!isDirectory && file.size > 0 && (
+                  <span className="w-14 text-right">{formatFileSize(file.size)}</span>
+                )}
+                {file.modifiedAt && (
+                  <span className="w-16 text-right">{formatDate(file.modifiedAt)}</span>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Children */}
@@ -283,7 +344,7 @@ export function FileTree({
         )}
       </div>
     );
-  }, [treeState, selectedFile, searchQuery, filterFiles, toggleExpand, handleSelect, handleOpen]);
+  }, [treeState, selectedFile, searchQuery, viewMode, filterFiles, toggleExpand, handleSelect, handleOpen]);
 
   // Sort and filter root files
   const displayFiles = useMemo(() => {
@@ -305,15 +366,29 @@ export function FileTree({
             <FolderTree className="h-4 w-4" />
             <span>Files</span>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            onClick={() => refetch()}
-            disabled={rootLoading}
-          >
-            <RefreshCw className={cn('h-3.5 w-3.5', rootLoading && 'animate-spin')} />
-          </Button>
+          <div className="flex items-center gap-1">
+            {/* View mode toggle */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={cycleViewMode}
+              title={`View: ${viewMode.charAt(0).toUpperCase() + viewMode.slice(1)}`}
+            >
+              {viewMode === 'simple' && <List className="h-3.5 w-3.5" />}
+              {viewMode === 'compact' && <LayoutList className="h-3.5 w-3.5" />}
+              {viewMode === 'detailed' && <Table2 className="h-3.5 w-3.5" />}
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => refetch()}
+              disabled={rootLoading}
+            >
+              <RefreshCw className={cn('h-3.5 w-3.5', rootLoading && 'animate-spin')} />
+            </Button>
+          </div>
         </div>
 
         {/* Search */}

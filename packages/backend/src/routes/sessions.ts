@@ -55,12 +55,14 @@ router.get('/', requireAuth, (req, res) => {
     .prepare(
       `SELECT id, user_id as userId, name, working_directory as workingDirectory,
               claude_session_id as claudeSessionId, status, last_message as lastMessage,
-              created_at as createdAt, updated_at as updatedAt
-       FROM sessions WHERE user_id = ? ORDER BY updated_at DESC`
+              starred, created_at as createdAt, updated_at as updatedAt
+       FROM sessions WHERE user_id = ? ORDER BY starred DESC, updated_at DESC`
     )
-    .all(userId);
+    .all(userId) as Array<Record<string, unknown>>;
 
-  res.json({ success: true, data: sessions });
+  const sessionsWithStarred = sessions.map((s) => ({ ...s, starred: Boolean(s.starred) }));
+
+  res.json({ success: true, data: sessionsWithStarred });
 });
 
 // Get session by ID
@@ -68,14 +70,16 @@ router.get('/:id', requireAuth, (req, res) => {
   const userId = (req as AuthenticatedRequest).userId;
   const db = getDatabase();
 
-  const session = db
+  const rawSession = db
     .prepare(
       `SELECT id, user_id as userId, name, working_directory as workingDirectory,
               claude_session_id as claudeSessionId, status, last_message as lastMessage,
-              created_at as createdAt, updated_at as updatedAt
+              starred, created_at as createdAt, updated_at as updatedAt
        FROM sessions WHERE id = ? AND user_id = ?`
     )
-    .get(req.params.id, userId);
+    .get(req.params.id, userId) as Record<string, unknown> | undefined;
+
+  const session = rawSession ? { ...rawSession, starred: Boolean(rawSession.starred) } : null;
 
   if (!session) {
     throw new AppError('Session not found', 404, 'NOT_FOUND');
@@ -152,16 +156,16 @@ router.post('/', requireAuth, async (req, res) => {
      VALUES (?, ?, ?, ?)`
   ).run(sessionId, userId, name, workingDirectory);
 
-  const session = db
+  const newSession = db
     .prepare(
       `SELECT id, user_id as userId, name, working_directory as workingDirectory,
               claude_session_id as claudeSessionId, status, last_message as lastMessage,
-              created_at as createdAt, updated_at as updatedAt
+              starred, created_at as createdAt, updated_at as updatedAt
        FROM sessions WHERE id = ?`
     )
-    .get(sessionId);
+    .get(sessionId) as Record<string, unknown>;
 
-  res.status(201).json({ success: true, data: session });
+  res.status(201).json({ success: true, data: { ...newSession, starred: Boolean(newSession.starred) } });
 });
 
 // Update session
@@ -206,16 +210,37 @@ router.put('/:id', requireAuth, (req, res) => {
     db.prepare(`UPDATE sessions SET ${updates.join(', ')} WHERE id = ?`).run(...values);
   }
 
-  const session = db
+  const updatedSession = db
     .prepare(
       `SELECT id, user_id as userId, name, working_directory as workingDirectory,
               claude_session_id as claudeSessionId, status, last_message as lastMessage,
-              created_at as createdAt, updated_at as updatedAt
+              starred, created_at as createdAt, updated_at as updatedAt
        FROM sessions WHERE id = ?`
     )
-    .get(req.params.id);
+    .get(req.params.id) as Record<string, unknown>;
 
-  res.json({ success: true, data: session });
+  res.json({ success: true, data: { ...updatedSession, starred: Boolean(updatedSession.starred) } });
+});
+
+// Toggle session starred status
+router.patch('/:id/star', requireAuth, (req, res) => {
+  const userId = (req as AuthenticatedRequest).userId;
+  const db = getDatabase();
+
+  // Verify session ownership
+  const session = db
+    .prepare('SELECT id, starred FROM sessions WHERE id = ? AND user_id = ?')
+    .get(req.params.id, userId) as { id: string; starred: number } | undefined;
+
+  if (!session) {
+    throw new AppError('Session not found', 404, 'NOT_FOUND');
+  }
+
+  // Toggle starred status
+  const newStarred = session.starred ? 0 : 1;
+  db.prepare('UPDATE sessions SET starred = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newStarred, req.params.id);
+
+  res.json({ success: true, data: { starred: Boolean(newStarred) } });
 });
 
 // Delete session

@@ -232,7 +232,7 @@ export class GitHubService {
   }
 
   async addRemote(
-    userId: string,
+    _userId: string,
     workingDirectory: string,
     remoteName: string,
     repoUrl: string

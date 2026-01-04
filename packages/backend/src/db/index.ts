@@ -57,6 +57,7 @@ function runMigrations(db: Database.Database): void {
       claude_session_id TEXT,
       status TEXT DEFAULT 'stopped',
       last_message TEXT,
+      starred INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -122,6 +123,13 @@ function runMigrations(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_mcp_servers_user_id ON mcp_servers(user_id);
     CREATE INDEX IF NOT EXISTS idx_cli_tools_user_id ON cli_tools(user_id);
   `);
+
+  // Migration: Add starred column to existing sessions table
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN starred INTEGER DEFAULT 0`);
+  } catch {
+    // Column already exists, ignore error
+  }
 }
 
 export { db };

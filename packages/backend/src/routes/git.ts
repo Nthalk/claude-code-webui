@@ -392,6 +392,179 @@ router.post('/discard', requireAuth, asyncHandler(async (req, res) => {
   }
 }));
 
+// Create new branch
+router.post('/branch/create', requireAuth, asyncHandler(async (req, res) => {
+  const { path: repoPath, name, checkout } = req.body;
+
+  if (!repoPath || !name) {
+    throw new AppError('Path and branch name are required', 400, 'MISSING_PARAMS');
+  }
+
+  try {
+    const git = getGit(repoPath);
+
+    // Create branch
+    await git.branch([name]);
+
+    // Checkout if requested
+    if (checkout) {
+      await git.checkout(name);
+    }
+
+    res.json({ success: true, data: { branch: name, checkedOut: !!checkout } });
+  } catch (err) {
+    if ((err as Error).message.includes('not a git repository')) {
+      throw new AppError('Not a git repository', 400, 'NOT_GIT_REPO');
+    }
+    if ((err as Error).message.includes('already exists')) {
+      throw new AppError('Branch already exists', 400, 'BRANCH_EXISTS');
+    }
+    throw err;
+  }
+}));
+
+// Delete branch
+router.post('/branch/delete', requireAuth, asyncHandler(async (req, res) => {
+  const { path: repoPath, name, force } = req.body;
+
+  if (!repoPath || !name) {
+    throw new AppError('Path and branch name are required', 400, 'MISSING_PARAMS');
+  }
+
+  try {
+    const git = getGit(repoPath);
+
+    // Delete branch (force if requested)
+    await git.branch([force ? '-D' : '-d', name]);
+
+    res.json({ success: true });
+  } catch (err) {
+    if ((err as Error).message.includes('not a git repository')) {
+      throw new AppError('Not a git repository', 400, 'NOT_GIT_REPO');
+    }
+    if ((err as Error).message.includes('not fully merged')) {
+      throw new AppError('Branch is not fully merged. Use force to delete anyway.', 400, 'BRANCH_NOT_MERGED');
+    }
+    throw err;
+  }
+}));
+
+// Pull from remote
+router.post('/pull', requireAuth, asyncHandler(async (req, res) => {
+  const { path: repoPath, remote, branch } = req.body;
+
+  if (!repoPath) {
+    throw new AppError('Path is required', 400, 'MISSING_PATH');
+  }
+
+  try {
+    const git = getGit(repoPath);
+
+    const pullOptions: string[] = [];
+    if (remote) pullOptions.push(remote);
+    if (branch) pullOptions.push(branch);
+
+    const result = await git.pull(pullOptions);
+
+    res.json({
+      success: true,
+      data: {
+        files: result.files,
+        insertions: result.insertions,
+        deletions: result.deletions,
+        summary: result.summary,
+      },
+    });
+  } catch (err) {
+    if ((err as Error).message.includes('not a git repository')) {
+      throw new AppError('Not a git repository', 400, 'NOT_GIT_REPO');
+    }
+    throw err;
+  }
+}));
+
+// Fetch from remote
+router.post('/fetch', requireAuth, asyncHandler(async (req, res) => {
+  const { path: repoPath, remote, prune } = req.body;
+
+  if (!repoPath) {
+    throw new AppError('Path is required', 400, 'MISSING_PATH');
+  }
+
+  try {
+    const git = getGit(repoPath);
+
+    const fetchOptions: string[] = [];
+    if (prune) fetchOptions.push('--prune');
+    if (remote) fetchOptions.push(remote);
+
+    await git.fetch(fetchOptions);
+
+    res.json({ success: true });
+  } catch (err) {
+    if ((err as Error).message.includes('not a git repository')) {
+      throw new AppError('Not a git repository', 400, 'NOT_GIT_REPO');
+    }
+    throw err;
+  }
+}));
+
+// Get remote tracking status (ahead/behind)
+router.get('/remote-status', requireAuth, asyncHandler(async (req, res) => {
+  const repoPath = req.query.path as string;
+
+  if (!repoPath) {
+    throw new AppError('Path is required', 400, 'MISSING_PATH');
+  }
+
+  try {
+    const git = getGit(repoPath);
+
+    // Get current branch
+    const currentBranch = (await git.revparse(['--abbrev-ref', 'HEAD'])).trim();
+
+    // Get tracking branch
+    let tracking: string | null = null;
+    try {
+      tracking = (await git.raw(['rev-parse', '--abbrev-ref', `${currentBranch}@{upstream}`])).trim();
+    } catch {
+      // No upstream configured
+    }
+
+    if (!tracking) {
+      res.json({
+        success: true,
+        data: {
+          branch: currentBranch,
+          tracking: null,
+          ahead: 0,
+          behind: 0,
+        },
+      });
+      return;
+    }
+
+    // Get ahead/behind counts
+    const revList = await git.raw(['rev-list', '--left-right', '--count', `${currentBranch}...${tracking}`]);
+    const [ahead, behind] = revList.trim().split('\t').map(Number);
+
+    res.json({
+      success: true,
+      data: {
+        branch: currentBranch,
+        tracking,
+        ahead: ahead || 0,
+        behind: behind || 0,
+      },
+    });
+  } catch (err) {
+    if ((err as Error).message.includes('not a git repository')) {
+      throw new AppError('Not a git repository', 400, 'NOT_GIT_REPO');
+    }
+    throw err;
+  }
+}));
+
 // Generate commit message using AI
 router.post('/generate-commit-message', requireAuth, asyncHandler(async (req, res) => {
   const { path: repoPath } = req.body;

@@ -8,6 +8,7 @@ export interface Session {
   claudeSessionId: string | null;
   status: SessionStatus;
   lastMessage: string | null;
+  starred: boolean;
   createdAt: string;
   updatedAt: string;
 }

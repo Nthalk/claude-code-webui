@@ -3,7 +3,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { requireAuth } from '../middleware/auth';
-import { asyncHandler } from '../middleware/errorHandler';
+import { asyncHandler, AppError } from '../middleware/errorHandler';
 import type { DiscoveredProject } from '@claude-code-webui/shared';
 
 const router = Router();
@@ -107,6 +107,9 @@ router.get('/', requireAuth, asyncHandler(async (_req, res) => {
 // Get session files for a specific project
 router.get('/:id/sessions', requireAuth, asyncHandler(async (req, res) => {
   const projectId = req.params.id;
+  if (!projectId) {
+    throw new AppError('Project ID is required', 400, 'MISSING_PROJECT_ID');
+  }
   const projectsDir = getClaudeProjectsDir();
 
   // Decode the project ID to get the directory name

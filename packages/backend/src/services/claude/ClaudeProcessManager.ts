@@ -151,7 +151,6 @@ interface ClaudeProcess {
 export class ClaudeProcessManager {
   private processes: Map<string, ClaudeProcess> = new Map();
   private io: Server<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>;
-  private cleanupTimer: ReturnType<typeof setInterval>;
 
   constructor(
     io: Server<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>
@@ -159,7 +158,7 @@ export class ClaudeProcessManager {
     this.io = io;
 
     // Start cleanup timer for disconnected sessions (every 60 seconds)
-    this.cleanupTimer = setInterval(() => {
+    setInterval(() => {
       this.cleanupDisconnectedSessions();
     }, 60 * 1000);
   }
@@ -176,48 +175,6 @@ export class ClaudeProcessManager {
     };
     proc.outputBuffer.push(bufferedMsg);
     proc.lastActivityAt = Date.now();
-  }
-
-  // Wrapper to emit and buffer output
-  private emitOutput(sessionId: string, data: { sessionId: string; content: string; isComplete: boolean }): void {
-    this.bufferMessage(sessionId, 'output', data);
-    this.io.to(`session:${sessionId}`).emit('session:output', data);
-  }
-
-  // Wrapper to emit and buffer message
-  private emitMessage(sessionId: string, data: { id: string; sessionId: string; role: string; content: string; createdAt: string; images?: unknown[] }): void {
-    this.bufferMessage(sessionId, 'message', data);
-    this.io.to(`session:${sessionId}`).emit('session:message', data);
-  }
-
-  // Wrapper to emit and buffer thinking
-  private emitThinking(sessionId: string, data: { sessionId: string; isThinking: boolean }): void {
-    this.bufferMessage(sessionId, 'thinking', data);
-    this.io.to(`session:${sessionId}`).emit('session:thinking', data);
-  }
-
-  // Wrapper to emit and buffer usage
-  private emitUsageData(sessionId: string, data: Parameters<typeof this.io.to<string>>[0] extends string ? Parameters<ReturnType<typeof this.io.to<string>>['emit']>[1] : never): void {
-    this.bufferMessage(sessionId, 'usage', data);
-    this.io.to(`session:${sessionId}`).emit('session:usage', data as never);
-  }
-
-  // Wrapper to emit and buffer tool_use
-  private emitToolUse(sessionId: string, data: { sessionId: string; toolName: string; status: 'started' | 'completed' | 'error' }): void {
-    this.bufferMessage(sessionId, 'tool_use', data);
-    this.io.to(`session:${sessionId}`).emit('session:tool_use', data);
-  }
-
-  // Wrapper to emit and buffer todos
-  private emitTodos(sessionId: string, data: { sessionId: string; todos: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed'; activeForm?: string }> }): void {
-    this.bufferMessage(sessionId, 'todos', data);
-    this.io.to(`session:${sessionId}`).emit('session:todos', data);
-  }
-
-  // Wrapper to emit and buffer agent
-  private emitAgent(sessionId: string, data: { sessionId: string; agentType: string; description?: string; status: 'started' | 'completed' | 'error' }): void {
-    this.bufferMessage(sessionId, 'agent', data);
-    this.io.to(`session:${sessionId}`).emit('session:agent', data);
   }
 
   // Wrapper to emit and buffer status

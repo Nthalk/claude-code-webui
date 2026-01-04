@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import {
   GitBranch,
   GitCommit as GitCommitIcon,
@@ -9,10 +9,23 @@ import {
   ChevronDown,
   Loader2,
   Upload,
+  Download,
+  CloudDownload,
+  Plus,
+  ArrowUp,
+  ArrowDown,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { api } from '@/services/api';
+import { toast } from '@/hooks/use-toast';
 import { PushToGitHubDialog } from '@/components/github';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { GitStatus } from './GitStatus';
 import { GitCommit } from './GitCommit';
 import { GitHistory } from './GitHistory';
@@ -31,6 +44,8 @@ export function GitPanel({ workingDirectory, className }: GitPanelProps) {
   const [activeTab, setActiveTab] = useState<TabId>('changes');
   const [selectedDiff, setSelectedDiff] = useState<{ file: string; staged: boolean } | null>(null);
   const [showPushDialog, setShowPushDialog] = useState(false);
+  const [showNewBranchDialog, setShowNewBranchDialog] = useState(false);
+  const [newBranchName, setNewBranchName] = useState('');
   const queryClient = useQueryClient();
 
   // Fetch git status to check if this is a git repo
@@ -82,8 +97,102 @@ export function GitPanel({ workingDirectory, className }: GitPanelProps) {
     retry: false,
   });
 
+  // Fetch remote status (ahead/behind)
+  const { data: remoteStatus } = useQuery({
+    queryKey: ['git-remote-status', workingDirectory],
+    queryFn: async () => {
+      const response = await api.get<ApiResponse<{ branch: string; tracking: string | null; ahead: number; behind: number }>>(
+        `/api/git/remote-status?path=${encodeURIComponent(workingDirectory)}`
+      );
+      if (response.data.success && response.data.data) {
+        return response.data.data;
+      }
+      return null;
+    },
+    enabled: !!status && (remotes?.length ?? 0) > 0,
+    retry: false,
+    refetchInterval: 60000, // Refresh every minute
+  });
+
+  // Pull mutation
+  const pullMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.post<ApiResponse<{ files: string[]; insertions: number; deletions: number }>>('/api/git/pull', {
+        path: workingDirectory,
+      });
+      return response.data;
+    },
+    onSuccess: (data) => {
+      if (data.success) {
+        queryClient.invalidateQueries({ queryKey: ['git-status', workingDirectory] });
+        queryClient.invalidateQueries({ queryKey: ['git-log', workingDirectory] });
+        queryClient.invalidateQueries({ queryKey: ['git-remote-status', workingDirectory] });
+        toast({
+          title: 'Pull successful',
+          description: data.data ? `${data.data.files.length} files updated` : 'Already up to date',
+        });
+      }
+    },
+    onError: (error: Error) => {
+      toast({ title: 'Pull failed', description: error.message, variant: 'destructive' });
+    },
+  });
+
+  // Fetch mutation
+  const fetchMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.post<ApiResponse<void>>('/api/git/fetch', {
+        path: workingDirectory,
+        prune: true,
+      });
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['git-branches', workingDirectory] });
+      queryClient.invalidateQueries({ queryKey: ['git-remote-status', workingDirectory] });
+      toast({ title: 'Fetch successful', description: 'Remote refs updated' });
+    },
+    onError: (error: Error) => {
+      toast({ title: 'Fetch failed', description: error.message, variant: 'destructive' });
+    },
+  });
+
+  // Create branch mutation
+  const createBranchMutation = useMutation({
+    mutationFn: async (name: string) => {
+      const response = await api.post<ApiResponse<{ branch: string; checkedOut: boolean }>>('/api/git/branch/create', {
+        path: workingDirectory,
+        name,
+        checkout: true,
+      });
+      return response.data;
+    },
+    onSuccess: (data) => {
+      if (data.success && data.data) {
+        queryClient.invalidateQueries({ queryKey: ['git-branches', workingDirectory] });
+        queryClient.invalidateQueries({ queryKey: ['git-status', workingDirectory] });
+        setShowNewBranchDialog(false);
+        setNewBranchName('');
+        toast({
+          title: 'Branch created',
+          description: `Switched to ${data.data.branch}`,
+        });
+      }
+    },
+    onError: (error: Error) => {
+      toast({ title: 'Branch creation failed', description: error.message, variant: 'destructive' });
+    },
+  });
+
   const handleFileSelect = (file: string, staged: boolean) => {
     setSelectedDiff({ file, staged });
+  };
+
+  const handleCreateBranch = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newBranchName.trim()) {
+      createBranchMutation.mutate(newBranchName.trim());
+    }
   };
 
   if (statusLoading) {
@@ -124,8 +233,66 @@ export function GitPanel({ workingDirectory, className }: GitPanelProps) {
                 {changesCount}
               </span>
             )}
+            {/* Ahead/Behind badges */}
+            {remoteStatus?.tracking && (
+              <div className="flex items-center gap-1">
+                {remoteStatus.ahead > 0 && (
+                  <span className="flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full bg-green-500/10 text-green-500" title={`${remoteStatus.ahead} commits ahead`}>
+                    <ArrowUp className="h-3 w-3" />
+                    {remoteStatus.ahead}
+                  </span>
+                )}
+                {remoteStatus.behind > 0 && (
+                  <span className="flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-500" title={`${remoteStatus.behind} commits behind`}>
+                    <ArrowDown className="h-3 w-3" />
+                    {remoteStatus.behind}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-1">
+            {/* New Branch */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setShowNewBranchDialog(true)}
+              title="New Branch"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
+            {/* Pull */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => pullMutation.mutate()}
+              disabled={pullMutation.isPending || !remotes?.length}
+              title="Pull"
+            >
+              {pullMutation.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5" />
+              )}
+            </Button>
+            {/* Fetch */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => fetchMutation.mutate()}
+              disabled={fetchMutation.isPending || !remotes?.length}
+              title="Fetch"
+            >
+              {fetchMutation.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <CloudDownload className="h-3.5 w-3.5" />
+              )}
+            </Button>
+            {/* Push */}
             <Button
               variant="ghost"
               size="icon"
@@ -135,6 +302,7 @@ export function GitPanel({ workingDirectory, className }: GitPanelProps) {
             >
               <Upload className="h-3.5 w-3.5" />
             </Button>
+            {/* Refresh */}
             <Button
               variant="ghost"
               size="icon"
@@ -218,6 +386,57 @@ export function GitPanel({ workingDirectory, className }: GitPanelProps) {
           queryClient.invalidateQueries({ queryKey: ['git-status', workingDirectory] });
         }}
       />
+
+      {/* New Branch Dialog */}
+      <Dialog open={showNewBranchDialog} onOpenChange={setShowNewBranchDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Plus className="h-5 w-5" />
+              Create New Branch
+            </DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleCreateBranch} className="space-y-4">
+            <div className="space-y-2">
+              <label htmlFor="branch-name" className="text-sm font-medium">
+                Branch Name
+              </label>
+              <Input
+                id="branch-name"
+                placeholder="feature/my-new-feature"
+                value={newBranchName}
+                onChange={(e) => setNewBranchName(e.target.value)}
+                autoFocus
+              />
+              <p className="text-xs text-muted-foreground">
+                Based on: {currentBranch?.name || status.branch}
+              </p>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShowNewBranchDialog(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={!newBranchName.trim() || createBranchMutation.isPending}
+              >
+                {createBranchMutation.isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Creating...
+                  </>
+                ) : (
+                  'Create & Switch'
+                )}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

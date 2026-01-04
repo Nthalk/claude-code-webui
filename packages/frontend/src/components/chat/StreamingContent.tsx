@@ -4,6 +4,9 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import ReactMarkdown from 'react-markdown';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 
 interface StreamingContentProps {
   content: string;
@@ -425,7 +428,7 @@ function PlanModeIndicator({ message }: { message?: string }) {
       {message && (
         <div className="p-4">
           <div className="prose prose-sm dark:prose-invert max-w-none">
-            <ReactMarkdown>{message}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{message}</ReactMarkdown>
           </div>
         </div>
       )}
@@ -433,7 +436,7 @@ function PlanModeIndicator({ message }: { message?: string }) {
   );
 }
 
-// Claude response with markdown
+// Claude response with markdown and LaTeX support
 function ClaudeResponse({ message }: { message: string }) {
   return (
     <div className="flex gap-3">
@@ -442,7 +445,7 @@ function ClaudeResponse({ message }: { message: string }) {
       </div>
       <div className="flex-1 min-w-0">
         <div className="prose prose-sm dark:prose-invert max-w-none">
-          <ReactMarkdown>{message}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{message}</ReactMarkdown>
         </div>
       </div>
     </div>
