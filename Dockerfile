@@ -19,8 +19,8 @@ COPY packages/shared/package.json ./packages/shared/
 COPY packages/backend/package.json ./packages/backend/
 COPY packages/frontend/package.json ./packages/frontend/
 
-# Install dependencies
-RUN pnpm install --frozen-lockfile
+# Install dependencies (not using frozen-lockfile for self-hosted flexibility)
+RUN pnpm install
 
 # Copy source code
 COPY . .

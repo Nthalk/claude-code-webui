@@ -82,6 +82,32 @@ router.get('/branches', requireAuth, asyncHandler(async (req, res) => {
   }
 }));
 
+// Get remotes
+router.get('/remotes', requireAuth, asyncHandler(async (req, res) => {
+  const repoPath = req.query.path as string;
+
+  if (!repoPath) {
+    throw new AppError('Path is required', 400, 'MISSING_PATH');
+  }
+
+  try {
+    const git = getGit(repoPath);
+    const remotes = await git.getRemotes(true);
+
+    const result = remotes.map((remote) => ({
+      name: remote.name,
+      url: remote.refs.push || remote.refs.fetch || '',
+    }));
+
+    res.json({ success: true, data: result });
+  } catch (err) {
+    if ((err as Error).message.includes('not a git repository')) {
+      throw new AppError('Not a git repository', 400, 'NOT_GIT_REPO');
+    }
+    throw err;
+  }
+}));
+
 // Get commit log
 router.get('/log', requireAuth, asyncHandler(async (req, res) => {
   const repoPath = req.query.path as string;

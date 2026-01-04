@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   GitBranch,
   GitCommit as GitCommitIcon,
@@ -8,9 +8,11 @@ import {
   RefreshCw,
   ChevronDown,
   Loader2,
+  Upload,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { api } from '@/services/api';
+import { PushToGitHubDialog } from '@/components/github';
 import { GitStatus } from './GitStatus';
 import { GitCommit } from './GitCommit';
 import { GitHistory } from './GitHistory';
@@ -28,6 +30,8 @@ type TabId = 'changes' | 'commit' | 'history';
 export function GitPanel({ workingDirectory, className }: GitPanelProps) {
   const [activeTab, setActiveTab] = useState<TabId>('changes');
   const [selectedDiff, setSelectedDiff] = useState<{ file: string; staged: boolean } | null>(null);
+  const [showPushDialog, setShowPushDialog] = useState(false);
+  const queryClient = useQueryClient();
 
   // Fetch git status to check if this is a git repo
   const { data: status, isLoading: statusLoading, refetch, isRefetching } = useQuery({
@@ -61,6 +65,22 @@ export function GitPanel({ workingDirectory, className }: GitPanelProps) {
   });
 
   const currentBranch = branches?.find((b) => b.isCurrent);
+
+  // Fetch remotes
+  const { data: remotes } = useQuery({
+    queryKey: ['git-remotes', workingDirectory],
+    queryFn: async () => {
+      const response = await api.get<ApiResponse<Array<{ name: string; url: string }>>>(
+        `/api/git/remotes?path=${encodeURIComponent(workingDirectory)}`
+      );
+      if (response.data.success && response.data.data) {
+        return response.data.data;
+      }
+      return [];
+    },
+    enabled: !!status,
+    retry: false,
+  });
 
   const handleFileSelect = (file: string, staged: boolean) => {
     setSelectedDiff({ file, staged });
@@ -105,15 +125,27 @@ export function GitPanel({ workingDirectory, className }: GitPanelProps) {
               </span>
             )}
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            onClick={() => refetch()}
-            disabled={isRefetching}
-          >
-            <RefreshCw className={cn('h-3.5 w-3.5', isRefetching && 'animate-spin')} />
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setShowPushDialog(true)}
+              title="Push to GitHub"
+            >
+              <Upload className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => refetch()}
+              disabled={isRefetching}
+              title="Refresh"
+            >
+              <RefreshCw className={cn('h-3.5 w-3.5', isRefetching && 'animate-spin')} />
+            </Button>
+          </div>
         </div>
 
         {/* Tabs */}
@@ -175,6 +207,17 @@ export function GitPanel({ workingDirectory, className }: GitPanelProps) {
           </div>
         )}
       </div>
+
+      <PushToGitHubDialog
+        open={showPushDialog}
+        onOpenChange={setShowPushDialog}
+        workingDirectory={workingDirectory}
+        currentBranch={currentBranch?.name || status.branch}
+        remotes={remotes}
+        onPushed={() => {
+          queryClient.invalidateQueries({ queryKey: ['git-status', workingDirectory] });
+        }}
+      />
     </div>
   );
 }
