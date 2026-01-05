@@ -175,54 +175,70 @@ export class ClaudeProcessManager {
     }, 60 * 1000);
   }
 
-  // Get the path to the permission prompt wrapper script
-  private getPermissionPromptScriptPath(): string {
-    // The shell script is always in the source directory (packages/backend/src/cli/)
-    // We need to find it relative to the current file location
+  // Get the path to the path transform hook script
+  private getPathTransformHookPath(): string {
     // In dev (tsx): __dirname = packages/backend/src/services/claude
-    // In prod (compiled): __dirname = packages/backend/dist/services/claude
+    // Hook is at: packages/backend/src/cli/path-transform-hook.ts
 
-    // First, try relative to source (development)
-    const devPath = path.resolve(__dirname, '../cli/permission-prompt-wrapper.sh');
+    const devPath = path.resolve(__dirname, '../../cli/path-transform-hook.ts');
     if (fsSync.existsSync(devPath)) {
       return devPath;
     }
 
     // If running from dist, the script is in src (parallel to dist)
-    // __dirname = packages/backend/dist/services/claude
-    // We want: packages/backend/src/cli/permission-prompt-wrapper.sh
-    const prodPath = path.resolve(__dirname, '../../../src/cli/permission-prompt-wrapper.sh');
+    const prodPath = path.resolve(__dirname, '../../../src/cli/path-transform-hook.ts');
     if (fsSync.existsSync(prodPath)) {
       return prodPath;
     }
 
-    // Fallback: try to find it from the package root
+    console.warn(`[HOOKS] Could not find path-transform-hook.ts, tried: ${devPath}, ${prodPath}`);
+    return devPath;
+  }
+
+  // Get the path to the WebUI MCP server script
+  private getMcpServerScriptPath(): string {
+    // Similar logic to permission prompt script
+    // In dev (tsx): __dirname = packages/backend/src/services/claude
+    // MCP server is at: packages/backend/src/mcp/webui-server.ts
+
+    // First, try relative to source (development)
+    const devPath = path.resolve(__dirname, '../mcp/webui-server.ts');
+    if (fsSync.existsSync(devPath)) {
+      return devPath;
+    }
+
+    // If running from dist, the script is in src (parallel to dist)
+    const prodPath = path.resolve(__dirname, '../../../src/mcp/webui-server.ts');
+    if (fsSync.existsSync(prodPath)) {
+      return prodPath;
+    }
+
+    // Fallback
     const packageRoot = path.resolve(__dirname, '../../../../');
-    const fallbackPath = path.join(packageRoot, 'src/cli/permission-prompt-wrapper.sh');
+    const fallbackPath = path.join(packageRoot, 'src/mcp/webui-server.ts');
     if (fsSync.existsSync(fallbackPath)) {
       return fallbackPath;
     }
 
-    console.warn(`[HOOKS] Could not find permission-prompt-wrapper.sh, tried: ${devPath}, ${prodPath}, ${fallbackPath}`);
-    return devPath; // Return dev path as default
+    console.warn(`[MCP] Could not find webui-server.ts, tried: ${devPath}, ${prodPath}, ${fallbackPath}`);
+    return devPath;
   }
 
-  // Generate settings JSON with PermissionRequest hook configured
+  // Generate settings JSON with hooks configured
   private getHookSettings(): string {
-    const scriptPath = this.getPermissionPromptScriptPath();
-    console.log(`[HOOKS] Using permission hook script: ${scriptPath}`);
+    const hookScriptPath = this.getPathTransformHookPath();
+    console.log(`[HOOKS] Using path transform hook: ${hookScriptPath}`);
 
-    // New hook format with matchers
-    // PreToolUse hooks run before every tool execution
+    // PreToolUse hook to transform absolute paths to relative paths
     const settings = {
       hooks: {
         PreToolUse: [
           {
-            matcher: '*',  // Match all tools
+            matcher: 'Read|Write|Edit|Glob|Grep|NotebookEdit',
             hooks: [
               {
                 type: 'command',
-                command: scriptPath,
+                command: `npx tsx ${hookScriptPath}`,
               },
             ],
           },
@@ -230,9 +246,54 @@ export class ClaudeProcessManager {
       },
     };
 
-    const json = JSON.stringify(settings);
-    console.log(`[HOOKS] Settings JSON: ${json}`);
-    return json;
+    return JSON.stringify(settings);
+  }
+
+  // Create .mcp.json file in the working directory to register WebUI MCP server
+  private async setupMcpConfig(sessionId: string, workingDirectory: string, mode: SessionMode): Promise<void> {
+    const mcpScriptPath = this.getMcpServerScriptPath();
+    console.log(`[MCP] Setting up MCP config with server script: ${mcpScriptPath}, mode: ${mode}`);
+
+    const mcpConfig = {
+      mcpServers: {
+        webui: {
+          type: 'stdio',
+          command: 'npx',
+          args: ['tsx', mcpScriptPath],
+          env: {
+            WEBUI_SESSION_ID: sessionId,
+            WEBUI_BACKEND_URL: `http://localhost:${config.port}`,
+            WEBUI_PROJECT_PATH: workingDirectory,
+            WEBUI_PERMISSION_MODE: mode,
+          },
+        },
+      },
+    };
+
+    const mcpJsonPath = path.join(workingDirectory, '.mcp.json');
+
+    // Check if .mcp.json already exists and merge if needed
+    let existingConfig: { mcpServers?: Record<string, unknown> } = {};
+    try {
+      const existingContent = await fs.readFile(mcpJsonPath, 'utf-8');
+      existingConfig = JSON.parse(existingContent);
+      console.log(`[MCP] Found existing .mcp.json, merging configs`);
+    } catch {
+      // File doesn't exist or is invalid, start fresh
+      console.log(`[MCP] No existing .mcp.json, creating new one`);
+    }
+
+    // Merge our webui server with any existing servers
+    const mergedConfig = {
+      ...existingConfig,
+      mcpServers: {
+        ...existingConfig.mcpServers,
+        ...mcpConfig.mcpServers,
+      },
+    };
+
+    await fs.writeFile(mcpJsonPath, JSON.stringify(mergedConfig, null, 2));
+    console.log(`[MCP] Wrote MCP config to ${mcpJsonPath}`);
   }
 
   // Helper method to buffer a message
@@ -334,25 +395,25 @@ export class ClaudeProcessManager {
     console.log(`[MODE] Starting session ${sessionId} with mode ${effectiveMode}`);
 
     // Build command args for stream-json mode
-    // IMPORTANT: Always use --dangerously-skip-permissions so our hook is the ONLY permission layer
-    // Without this, Claude's internal permission system would still prompt after our hook approves
     const args: string[] = [
       '--print',
       '--verbose',
-      '--debug', 'hooks',  // Debug hook execution
       '--output-format', 'stream-json',
       '--input-format', 'stream-json',
       '--include-partial-messages',
-      '--dangerously-skip-permissions',  // Let our hook handle all permissions
     ];
 
-    // Add permission hook settings for all modes except 'danger'
-    // In danger mode, skip hooks entirely (tools run without any checks)
-    // In other modes, our hook surfaces permission requests to the UI
-    if (effectiveMode !== 'danger') {
-      const hookSettings = this.getHookSettings();
-      args.push('--settings', hookSettings);
-    }
+    // Set up MCP config for WebUI tools (ask_user, permission_prompt, etc.)
+    // Pass the mode so the MCP server knows how to handle permissions
+    await this.setupMcpConfig(sessionId, session.working_directory, effectiveMode);
+
+    // Use MCP tool for all permission prompts
+    // The MCP server will auto-approve in 'danger' mode
+    args.push('--permission-prompt-tool', 'mcp__webui__permission_prompt');
+
+    // Add hook settings for path transformation (converts absolute paths to relative)
+    const hookSettings = this.getHookSettings();
+    args.push('--settings', hookSettings);
 
     const isResuming = !!session.claude_session_id;
     if (isResuming && session.claude_session_id) {
@@ -1071,6 +1132,39 @@ This is the project you should be working on. All file operations should be rela
   async sendRawInput(sessionId: string, userId: string, input: string): Promise<void> {
     // In stream-json mode, raw input is treated as a user message
     await this.sendMessage(sessionId, userId, input);
+  }
+
+  /**
+   * Inject a tool result directly into Claude's stdin.
+   * Used for tools like AskUserQuestion where we handle the interaction
+   * externally and need to provide the result directly.
+   */
+  injectToolResult(sessionId: string, toolUseId: string, result: unknown): void {
+    const proc = this.processes.get(sessionId);
+    if (!proc) {
+      console.error(`[TOOL-INJECT] Session ${sessionId} not found`);
+      return;
+    }
+
+    // Format as a tool_result message
+    const toolResultMsg = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: toolUseId,
+            content: typeof result === 'string' ? result : JSON.stringify(result),
+          },
+        ],
+      },
+    };
+
+    console.log(`[TOOL-INJECT] Injecting tool result for ${toolUseId} in session ${sessionId}`);
+    console.log(`[TOOL-INJECT] Result: ${JSON.stringify(result).substring(0, 200)}...`);
+
+    proc.process.stdin?.write(JSON.stringify(toolResultMsg) + '\n');
   }
 
   stopSession(sessionId: string, userId: string): void {

@@ -11,6 +11,16 @@ import { config } from '../config';
 import { ClaudeProcessManager } from '../services/claude/ClaudeProcessManager';
 import { GeminiService } from '../services/gemini';
 
+// Global reference to the process manager for use by routes
+let _processManager: ClaudeProcessManager | null = null;
+
+export function getProcessManager(): ClaudeProcessManager {
+  if (!_processManager) {
+    throw new Error('Process manager not initialized. Call setupWebSocket first.');
+  }
+  return _processManager;
+}
+
 export function setupWebSocket(httpServer: HttpServer): Server {
   const io = new Server<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>(
     httpServer,
@@ -31,6 +41,7 @@ export function setupWebSocket(httpServer: HttpServer): Server {
   );
 
   const processManager = new ClaudeProcessManager(io);
+  _processManager = processManager; // Store global reference for routes
   const geminiService = new GeminiService(io);
 
   // Check Gemini CLI availability on startup
