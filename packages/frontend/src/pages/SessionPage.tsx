@@ -1,24 +1,38 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Send, Square, FolderOpen, Image, X, Paperclip, CheckCircle2, Brain, Wrench, FileText, Terminal, Search, Edit3, Globe, ListTodo, Circle, CheckCircle, Loader2, ChevronRight, ChevronDown, GitBranch, MessageSquare, Code2, Star, RotateCcw } from 'lucide-react';
+import { Square, FolderOpen, Image, X, Paperclip, Brain, ListTodo, Circle, CheckCircle, Loader2, GitBranch, MessageSquare, Code2, Star, RotateCcw, MoreVertical, Settings, Menu, ChevronDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
 import { StreamingContent } from '@/components/chat/StreamingContent';
 import { SessionControls } from '@/components/session/SessionControls';
 import { FileTree } from '@/components/file-tree';
 import { GitPanel } from '@/components/git-panel';
 import { EditorPanel } from '@/components/code-editor';
-import { MobileBottomNav, type MobileView } from '@/components/mobile';
+import type { MobileView } from '@/components/mobile';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
 import { api } from '@/services/api';
 import { socketService } from '@/services/socket';
-import type { Session, Message, ApiResponse, MessageImage, CliTool, CliToolExecution, Command, CommandExecutionResult, SessionMode } from '@claude-code-webui/shared';
+import type { Session, Message, ApiResponse, MessageImage, CliTool, CliToolExecution, Command, CommandExecutionResult, SessionMode, ModelType, ToolExecution } from '@claude-code-webui/shared';
 import { cn } from '@/lib/utils';
 import { CommandMenu } from '@/components/chat/CommandMenu';
 import { InteractiveOptions, detectOptions, isChoicePrompt } from '@/components/chat/InteractiveOptions';
@@ -26,6 +40,7 @@ import { ToolExecutionCard } from '@/components/chat/ToolExecutionCard';
 import { PermissionApprovalDialog } from '@/components/chat/PermissionApprovalDialog';
 import { UserQuestionDialog } from '@/components/chat/UserQuestionDialog';
 import { useDocumentSwipeGesture } from '@/hooks';
+import { useTheme, type FontFamily, type FontSize } from '@/providers/ThemeProvider';
 import type { PermissionAction, UserQuestionAnswers } from '@claude-code-webui/shared';
 
 interface ImageAttachment {
@@ -38,6 +53,48 @@ function generateId() {
   return Math.random().toString(36).substring(2, 9);
 }
 
+// Format timestamp iMessage-style: relative for recent, time for same day, date+time for older
+function formatMessageTimestamp(timestamp: string | number): string {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffSeconds = Math.floor(diffMs / 1000);
+  const diffMinutes = Math.floor(diffSeconds / 60);
+
+  // Within the last minute: show seconds ago
+  if (diffSeconds < 60) {
+    return diffSeconds <= 1 ? 'just now' : `${diffSeconds}s ago`;
+  }
+
+  // Within the last hour: show minutes ago
+  if (diffMinutes < 60) {
+    return `${diffMinutes}m ago`;
+  }
+
+  // Same day: show time only
+  const isToday = date.toDateString() === now.toDateString();
+  const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+  if (isToday) {
+    return timeStr;
+  }
+
+  // Yesterday
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) {
+    return `Yesterday, ${timeStr}`;
+  }
+
+  // Same year: show month and day with time
+  if (date.getFullYear() === now.getFullYear()) {
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ', ' + timeStr;
+  }
+
+  // Different year: show full date with time
+  return date.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' }) + ', ' + timeStr;
+}
+
 export function SessionPage() {
   const { id } = useParams<{ id: string }>();
   const [input, setInput] = useState('');
@@ -45,21 +102,24 @@ export function SessionPage() {
   const [isDragging, setIsDragging] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [sessionMode, setSessionMode] = useState<SessionMode>('auto-accept');
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
-  const lastMessageIdRef = useRef<string | null>(null);
-  const { messages, streamingContent, activity, activeAgent, todos, generatedImages, toolExecutions, pendingPermissions, pendingUserQuestions, setMessages, clearStreamingContent, selectedFile, setSelectedFile, openFile: openFileInStore, openFiles } = useSessionStore();
-  const [showSavedIndicator, setShowSavedIndicator] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const [showScrollButton, setShowScrollButton] = useState(false);
+  const { messages, streamingContent, activity, todos, generatedImages, toolExecutions, pendingPermissions, pendingUserQuestions, setMessages, setToolExecutions, clearToolExecutions, clearGeneratedImages, clearStreamingContent, selectedFile, setSelectedFile, openFile: openFileInStore, openFiles } = useSessionStore();
   const [selectedCliTool, setSelectedCliTool] = useState<string | null>(null);
   const [isExecutingTool, setIsExecutingTool] = useState(false);
   const cliToolAbortRef = useRef<AbortController | null>(null);
   const [showCommandMenu, setShowCommandMenu] = useState(false);
   const [commandMenuIndex, setCommandMenuIndex] = useState(0);
-  const [mobileView, setMobileView] = useState<MobileView>('chat');
+  const [visibleTimestamp, setVisibleTimestamp] = useState<string | null>(null);
+  const [showProjectSettings, setShowProjectSettings] = useState(false);
 
-  const { usage, addMessage } = useSessionStore();
+  const { usage, addMessage, mobileView, setMobileView, setMobileMenuOpen } = useSessionStore();
+  const { settings: themeSettings, updateDesktopFont, updateDesktopSize, updateMobileFont, updateMobileSize } = useTheme();
 
   // Mobile swipe gesture navigation
   const mobileViewOrder = useMemo((): MobileView[] => {
@@ -146,13 +206,14 @@ export function SessionPage() {
   const currentActivity = activity[id || ''] || { type: 'idle' as const };
   const currentUsage = usage[id || ''];
   const currentTodos = todos[id || ''] || [];
-  const currentActiveAgent = activeAgent[id || ''];
   const currentGeneratedImages = generatedImages[id || ''] || [];
   const currentToolExecutions = toolExecutions[id || ''] || [];
   const currentPendingPermission = pendingPermissions[id || ''] || null;
   const currentPendingUserQuestion = pendingUserQuestions[id || ''] || null;
-  const [showTodos, setShowTodos] = useState(true);
-  const [rightPanelTab, setRightPanelTab] = useState<'files' | 'todos' | 'git'>('files');
+
+  // Right panel state from store (controlled by sidebar toggle buttons)
+  const { rightPanelTab, setRightPanelTab } = useSessionStore();
+
   const [mainView, setMainView] = useState<'chat' | 'editor'>('chat');
   const currentSelectedFile = selectedFile[id || ''];
   const currentOpenFiles = openFiles[id || ''] || [];
@@ -180,41 +241,7 @@ export function SessionPage() {
       data: exec,
       timestamp: exec.timestamp,
     })),
-  ].sort((a, b) => a.timestamp - b.timestamp);
-
-  // Helper to get tool icon and name
-  const getToolDisplay = (toolName: string) => {
-    const toolMap: Record<string, { icon: typeof Wrench; label: string }> = {
-      'Write': { icon: FileText, label: 'Writing file' },
-      'Read': { icon: Search, label: 'Reading file' },
-      'Edit': { icon: Edit3, label: 'Editing file' },
-      'Bash': { icon: Terminal, label: 'Running command' },
-      'Glob': { icon: Search, label: 'Searching files' },
-      'Grep': { icon: Search, label: 'Searching code' },
-      'WebFetch': { icon: Globe, label: 'Fetching webpage' },
-      'WebSearch': { icon: Globe, label: 'Searching web' },
-      'Task': { icon: Brain, label: 'Starting agent' },
-    };
-    return toolMap[toolName] || { icon: Wrench, label: toolName };
-  };
-
-  // Helper to get agent display name
-  const getAgentDisplay = (agentType: string) => {
-    const agentMap: Record<string, string> = {
-      'Explore': 'Explorer',
-      'Plan': 'Planner',
-      'general-purpose': 'General',
-      'claude-code-guide': 'Documentation',
-      'research-bot': 'Research',
-      'frontend-developer': 'Frontend Dev',
-      'mobile-developer': 'Mobile Dev',
-      'backend-dev': 'Backend Dev',
-      'fullstack-dev': 'Fullstack Dev',
-      'api-designer': 'API Designer',
-      'ui-designer': 'UI Designer',
-    };
-    return agentMap[agentType] || agentType;
-  };
+  ].sort((a, b) => a.timestamp - b.timestamp); // Chronological order
 
   // Fetch session details
   const { data: session, isLoading: sessionLoading } = useQuery({
@@ -236,6 +263,20 @@ export function SessionPage() {
       const response = await api.get<ApiResponse<Message[]>>(`/api/sessions/${id}/messages`);
       if (response.data.success && response.data.data) {
         setMessages(id!, response.data.data);
+        return response.data.data;
+      }
+      return [];
+    },
+    enabled: !!id,
+  });
+
+  // Fetch tool executions
+  useQuery({
+    queryKey: ['toolExecutions', id],
+    queryFn: async () => {
+      const response = await api.get<ApiResponse<ToolExecution[]>>(`/api/sessions/${id}/tool-executions`);
+      if (response.data.success && response.data.data) {
+        setToolExecutions(id!, response.data.data);
         return response.data.data;
       }
       return [];
@@ -277,41 +318,21 @@ export function SessionPage() {
     // Use reconnect instead of subscribe to get buffered messages if session is running
     socketService.reconnectToSession(id);
 
+    // Start heartbeat to detect if backend restarts
+    socketService.startHeartbeat(id, (sessionId) => {
+      console.log(`[SESSION] Heartbeat detected session ${sessionId} not found, starting session`);
+      // Backend restarted - start the session by sending an empty message
+      // sendMessage will auto-start the session if it doesn't exist
+      socketService.sendMessage(sessionId, '');
+      // Also reconnect to get proper subscription
+      setTimeout(() => socketService.reconnectToSession(sessionId), 500);
+    });
+
     return () => {
+      socketService.stopHeartbeat();
       socketService.unsubscribeFromSession(id);
     };
   }, [id]);
-
-  // Scroll to bottom when new messages arrive
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [sessionMessages, currentStreamingContent]);
-
-  // Show a brief indicator when an assistant message is persisted
-  useEffect(() => {
-    if (!id || sessionMessages.length === 0) {
-      lastMessageIdRef.current = null;
-      return;
-    }
-
-    const lastMessage = sessionMessages[sessionMessages.length - 1];
-    if (!lastMessage) return;
-
-    const previousId = lastMessageIdRef.current;
-    lastMessageIdRef.current = lastMessage.id;
-
-    if (previousId && lastMessage.id !== previousId && lastMessage.role === 'assistant') {
-      setShowSavedIndicator(true);
-    }
-  }, [id, sessionMessages]);
-
-  useEffect(() => {
-    if (!showSavedIndicator) return;
-    const timeout = window.setTimeout(() => {
-      setShowSavedIndicator(false);
-    }, 2000);
-    return () => window.clearTimeout(timeout);
-  }, [showSavedIndicator]);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -321,6 +342,38 @@ export function SessionPage() {
       textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px';
     }
   }, [input]);
+
+  // Track scroll position to determine if user is at bottom
+  const handleScroll = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const { scrollTop, scrollHeight, clientHeight } = container;
+    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+    const atBottom = distanceFromBottom < 50; // Within 50px of bottom
+
+    setIsAtBottom(atBottom);
+    setShowScrollButton(!atBottom && scrollHeight > clientHeight);
+  }, []);
+
+  // Auto-scroll to bottom when messages change, but only if already at bottom
+  useEffect(() => {
+    if (isAtBottom) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+    }
+  }, [timeline.length, currentStreamingContent, isAtBottom]);
+
+  // Scroll to bottom function for the button
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    setIsAtBottom(true);
+    setShowScrollButton(false);
+    // Focus the input after scrolling
+    setTimeout(() => {
+      textareaRef.current?.focus();
+    }, 100);
+  }, []);
+
 
   // Handle paste for images
   useEffect(() => {
@@ -347,16 +400,16 @@ export function SessionPage() {
   useEffect(() => {
     if (mobileView === 'git') {
       setRightPanelTab('git');
-      setShowTodos(true);
     } else if (mobileView === 'todos') {
       setRightPanelTab('todos');
-      setShowTodos(true);
+    } else if (mobileView === 'files') {
+      setRightPanelTab('files');
     } else if (mobileView === 'editor') {
       setMainView('editor');
     } else if (mobileView === 'chat') {
       setMainView('chat');
     }
-  }, [mobileView]);
+  }, [mobileView, setRightPanelTab]);
 
   const addImages = useCallback((files: File[]) => {
     const imageFiles = files.filter(file => file.type.startsWith('image/'));
@@ -441,7 +494,12 @@ export function SessionPage() {
         const result = response.data.data;
         if (result) {
           if (result.action === 'clear') {
+            // Delete messages and tool executions from database
+            await api.delete(`/api/sessions/${id}/messages`);
+            // Clear UI state
             setMessages(id, []);
+            clearToolExecutions(id);
+            clearGeneratedImages(id);
           } else if (result.action === 'send_message' && result.response) {
             // Send the processed command template as a message
             socketService.sendMessage(id, result.response);
@@ -562,6 +620,12 @@ export function SessionPage() {
     }
   }, [id]);
 
+  const handleModelChange = useCallback((newModel: ModelType) => {
+    if (id) {
+      socketService.setSessionModel(id, newModel);
+    }
+  }, [id]);
+
   const handlePermissionResponse = useCallback(async (action: PermissionAction, pattern?: string) => {
     if (!id || !currentPendingPermission) return;
     try {
@@ -618,7 +682,7 @@ export function SessionPage() {
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
-      className="flex flex-col h-full min-h-0 relative"
+      className="flex flex-col h-full min-h-0 relative overflow-hidden"
     >
       {/* Drop overlay */}
       {isDragging && (
@@ -631,49 +695,71 @@ export function SessionPage() {
       )}
 
       {/* Session Header */}
-      <div className="shrink-0 pb-4 border-b mb-4 space-y-3 overflow-visible">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-bold flex items-center gap-2">
+      <div className="shrink-0 pb-1 md:pb-4 border-b mb-1 md:mb-4 overflow-visible">
+        <div className="flex items-center justify-between gap-2 md:gap-4 md:flex-wrap">
+          {/* Mobile menu button */}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setMobileMenuOpen(true)}
+            className="md:hidden h-8 w-8 shrink-0"
+          >
+            <Menu className="h-5 w-5" />
+          </Button>
+
+          <div className="min-w-0 flex-1 md:flex-initial">
+            <h2 className="text-base md:text-xl font-bold flex items-center gap-2">
               <button
                 onClick={() => starMutation.mutate()}
                 disabled={starMutation.isPending}
-                className="hover:scale-110 transition-transform"
+                className="hover:scale-110 transition-transform hidden md:block"
                 title={session.starred ? 'Unstar session' : 'Star session'}
               >
                 <Star
                   className={cn(
-                    'h-5 w-5 transition-colors',
+                    'h-4 w-4 md:h-5 md:w-5 transition-colors',
                     session.starred
                       ? 'text-amber-500 fill-amber-500'
                       : 'text-muted-foreground hover:text-amber-400'
                   )}
                 />
               </button>
-              {session.name}
+              <span className="truncate">{session.name}</span>
               <span
                 className={cn(
-                  'inline-block h-2.5 w-2.5 rounded-full',
+                  'inline-block h-2 w-2 md:h-2.5 md:w-2.5 rounded-full shrink-0',
                   session.status === 'running' && 'bg-green-500 animate-pulse',
                   session.status === 'stopped' && 'bg-gray-400',
                   session.status === 'error' && 'bg-red-500'
                 )}
               />
             </h2>
-            <p className="text-sm text-muted-foreground flex items-center gap-1.5">
-              <FolderOpen className="h-3.5 w-3.5" />
-              {session.workingDirectory}
+            {/* Hide working directory on mobile to save space */}
+            <p className="hidden md:flex text-sm text-muted-foreground items-center gap-1.5 max-w-full">
+              <FolderOpen className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">{session.workingDirectory}</span>
             </p>
           </div>
-          <div className="flex gap-2 items-center">
-            {/* CLI Tool selector - visible in header */}
+          <div className="flex gap-2 items-center shrink-0">
+            {/* Session controls - unified for mobile and desktop */}
+            <SessionControls
+              mode={sessionMode}
+              onModeChange={handleModeChange}
+              onModelChange={handleModelChange}
+              usage={currentUsage}
+              sessionLimit={usageLimits?.session}
+              weeklyAllModels={usageLimits?.weeklyAll}
+              weeklySonnet={usageLimits?.weeklySonnet}
+            />
+
+            {/* CLI Tool selector - hidden on mobile */}
             {cliTools && cliTools.length > 0 && (
-              <div className="relative shrink-0">
+              <div className="relative shrink-0 hidden md:block">
                 <select
                   value={selectedCliTool || ''}
                   onChange={(e) => setSelectedCliTool(e.target.value || null)}
                   className={cn(
-                    "h-9 px-2 md:px-3 rounded-lg border text-xs md:text-sm font-medium transition-all cursor-pointer",
+                    "h-9 px-3 rounded-lg border text-sm font-medium transition-all cursor-pointer",
                     "focus:outline-none focus:ring-2 focus:ring-ring",
                     selectedCliTool
                       ? "bg-orange-500/10 border-orange-500/50 text-orange-600 dark:text-orange-400"
@@ -693,16 +779,6 @@ export function SessionPage() {
               </div>
             )}
 
-            {session.status === 'running' && (
-              <Button variant="outline" onClick={handleInterrupt} className="gap-2 h-9">
-                <Square className="h-4 w-4" />
-                <span className="hidden sm:inline">Interrupt</span>
-              </Button>
-            )}
-            <Button variant="outline" onClick={handleRestart} className="gap-2 h-9" title="Restart Claude session">
-              <RotateCcw className="h-4 w-4" />
-              <span className="hidden sm:inline">Restart</span>
-            </Button>
             {isExecutingTool && (
               <Button variant="outline" onClick={handleCancelCliTool} className="gap-2 h-9 border-orange-500/50 text-orange-600 hover:bg-orange-500/10">
                 <Square className="h-4 w-4" />
@@ -710,9 +786,35 @@ export function SessionPage() {
               </Button>
             )}
 
-            {/* View Toggle */}
+            {/* Session Menu */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="icon" className="h-9 w-9">
+                  <MoreVertical className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {session.status === 'running' && (
+                  <DropdownMenuItem onClick={handleInterrupt}>
+                    <Square className="h-4 w-4 mr-2" />
+                    Interrupt
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onClick={handleRestart}>
+                  <RotateCcw className="h-4 w-4 mr-2" />
+                  Restart Session
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => setShowProjectSettings(true)}>
+                  <Settings className="h-4 w-4 mr-2" />
+                  Project Settings
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* View Toggle - desktop only (mobile uses layout header dropdown) */}
             {hasOpenFiles && (
-              <div className="flex gap-1 bg-muted rounded-lg p-0.5">
+              <div className="hidden md:flex gap-1 bg-muted rounded-lg p-0.5">
                 <button
                   onClick={() => setMainView('chat')}
                   className={cn(
@@ -745,24 +847,13 @@ export function SessionPage() {
           </div>
         </div>
 
-        {/* Controls Bar */}
-        <SessionControls
-          mode={sessionMode}
-          onModeChange={handleModeChange}
-          usage={currentUsage}
-          sessionLimit={usageLimits?.session}
-          weeklyAllModels={usageLimits?.weeklyAll}
-          weeklySonnet={usageLimits?.weeklySonnet}
-        />
       </div>
 
       {/* Main content area with sidebar */}
-      <div className="flex-1 min-h-0 flex gap-4">
+      <div className="flex-1 min-h-0 flex gap-4 overflow-hidden">
         {/* Main Content - Chat or Editor (hidden on mobile for files/git/todos views) */}
         <div className={cn(
-          "flex-1 min-h-0",
-          mainView === 'chat' && "overflow-auto space-y-4 pb-4",
-          showTodos && "pr-4",
+          "flex-1 min-h-0 overflow-hidden relative",
           // Mobile: hide for files, git, todos views
           (mobileView === 'files' || mobileView === 'git' || mobileView === 'todos') && "hidden md:block"
         )}>
@@ -770,85 +861,131 @@ export function SessionPage() {
           <EditorPanel sessionId={id || ''} />
         ) : (
           <>
-        {timeline.length === 0 && !currentStreamingContent && (
-          <div className="flex items-center justify-center h-full text-center">
-            <div>
-              <div className="p-4 rounded-full bg-muted/50 mb-4 mx-auto w-fit">
-                <Image className="h-8 w-8 text-muted-foreground/50" />
-              </div>
-              <p className="text-muted-foreground mb-1">Start a conversation</p>
-              <p className="text-xs text-muted-foreground/70">
-                Type a message or paste/drop an image
-              </p>
-            </div>
-          </div>
-        )}
+            <div
+              ref={scrollContainerRef}
+              onScroll={handleScroll}
+              className="flex flex-col h-full overflow-y-auto overflow-x-hidden overscroll-contain"
+            >
+              {/* Empty state - centered */}
+              {timeline.length === 0 && !currentStreamingContent && (
+                <div className="flex-1 flex items-center justify-center text-center">
+                  <div>
+                    <div className="p-4 rounded-full bg-muted/50 mb-4 mx-auto w-fit">
+                      <Image className="h-8 w-8 text-muted-foreground/50" />
+                    </div>
+                    <p className="text-muted-foreground mb-1">Start a conversation</p>
+                    <p className="text-xs text-muted-foreground/70">
+                      Type a message or paste/drop an image
+                    </p>
+                  </div>
+                </div>
+              )}
 
-        {/* Unified timeline: messages and generated images sorted by timestamp */}
+              {/* Spacer to push messages to bottom */}
+              {(timeline.length > 0 || currentStreamingContent) && (
+                <div className="flex-1 min-h-0" />
+              )}
+
+              {/* Messages */}
+              <div className="flex flex-col gap-2 md:gap-4 pb-2 md:pb-4">
+
+        {/* Unified timeline: messages and generated images sorted by timestamp (chronological) */}
         {timeline.map((item, index) => {
           if (item.type === 'message') {
             const message = item.data;
+            const isTimestampVisible = visibleTimestamp === message.id;
             return (
               <div
                 key={message.id}
-                className={cn('flex animate-fade-in', message.role === 'user' ? 'justify-end' : 'justify-start')}
+                className={cn('flex flex-col animate-fade-in w-full', message.role === 'user' ? 'items-end' : 'items-start')}
               >
-                <Card
+                {/* Timestamp - shown when message is clicked */}
+                <div
                   className={cn(
-                    'max-w-[80%] p-4',
-                    message.role === 'user'
-                      ? 'bg-primary text-primary-foreground'
-                      : 'bg-card border'
+                    'text-xs text-muted-foreground/70 mb-1 transition-all duration-200',
+                    isTimestampVisible ? 'opacity-100 h-auto' : 'opacity-0 h-0 overflow-hidden'
                   )}
                 >
-                  {/* Image thumbnails for user messages */}
-                  {message.images && message.images.length > 0 && (
-                    <div className="flex flex-wrap gap-2 mb-3">
-                      {message.images.map((img: MessageImage, imgIndex: number) => {
-                        const token = useAuthStore.getState().token || '';
-                        const imageUrl = `/api/sessions/${id}/images/${img.filename}?token=${encodeURIComponent(token)}`;
-                        return (
-                          <img
-                            key={imgIndex}
-                            src={imageUrl}
-                            alt={`Attachment ${imgIndex + 1}`}
-                            className="max-h-32 max-w-48 rounded-lg border border-primary-foreground/20 object-cover cursor-pointer hover:opacity-90 transition-opacity"
-                            onClick={() => window.open(imageUrl, '_blank')}
-                          />
-                        );
-                      })}
+                  {formatMessageTimestamp(message.createdAt)}
+                </div>
+                <div className={cn('flex w-full', message.role === 'user' ? 'justify-end' : 'justify-start')}>
+                  {/* iMessage-style tail for assistant messages */}
+                  {message.role === 'assistant' && (
+                    <div className="flex-shrink-0 w-2 self-end">
+                      <svg viewBox="0 0 8 13" className="w-2 h-3 text-card fill-current" style={{ marginBottom: '-1px' }}>
+                        <path d="M0 0 L8 0 L8 13 C8 13 8 6 0 0" />
+                      </svg>
                     </div>
                   )}
-                  <div className={cn(
-                    'prose prose-sm max-w-none',
-                    message.role === 'user' ? 'prose-invert' : 'dark:prose-invert'
-                  )}>
-                    <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{message.content}</ReactMarkdown>
-                  </div>
-                  {/* Interactive options for assistant messages with choices */}
-                  {message.role === 'assistant' && isChoicePrompt(message.content) && (() => {
-                    const options = detectOptions(message.content);
-                    return options ? (
-                      <InteractiveOptions
-                        options={options}
-                        onSelect={(selected) => {
-                          if (id) {
-                            socketService.sendMessage(id, selected);
-                          }
-                        }}
-                        disabled={session.status !== 'running'}
-                      />
-                    ) : null;
-                  })()}
-                </Card>
+                  <Card
+                    className={cn(
+                      'p-2 md:p-4 cursor-pointer select-none max-w-[calc(100vw-2rem)] md:max-w-none overflow-hidden',
+                      message.role === 'user'
+                        ? 'bg-primary text-primary-foreground rounded-br-sm border-primary'
+                        : 'bg-card rounded-bl-sm'
+                    )}
+                    onClick={() => setVisibleTimestamp(isTimestampVisible ? null : message.id)}
+                  >
+                    {/* Image thumbnails for user messages */}
+                    {message.images && message.images.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {message.images.map((img: MessageImage, imgIndex: number) => {
+                          const token = useAuthStore.getState().token || '';
+                          const imageUrl = `/api/sessions/${id}/images/${img.filename}?token=${encodeURIComponent(token)}`;
+                          return (
+                            <img
+                              key={imgIndex}
+                              src={imageUrl}
+                              alt={`Attachment ${imgIndex + 1}`}
+                              className="max-h-32 max-w-48 rounded-lg border border-primary-foreground/20 object-cover cursor-pointer hover:opacity-90 transition-opacity"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                window.open(imageUrl, '_blank');
+                              }}
+                            />
+                          );
+                        })}
+                      </div>
+                    )}
+                    <div className={cn(
+                      'prose prose-sm max-w-none overflow-x-auto',
+                      message.role === 'user' ? 'prose-invert' : 'dark:prose-invert'
+                    )}>
+                      <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{message.content}</ReactMarkdown>
+                    </div>
+                    {/* Interactive options for assistant messages with choices */}
+                    {message.role === 'assistant' && isChoicePrompt(message.content) && (() => {
+                      const options = detectOptions(message.content);
+                      return options ? (
+                        <InteractiveOptions
+                          options={options}
+                          onSelect={(selected) => {
+                            if (id) {
+                              socketService.sendMessage(id, selected);
+                            }
+                          }}
+                          disabled={session.status !== 'running'}
+                        />
+                      ) : null;
+                    })()}
+                  </Card>
+                  {/* iMessage-style tail for user messages */}
+                  {message.role === 'user' && (
+                    <div className="flex-shrink-0 w-2 self-end mb-1">
+                      <svg viewBox="0 0 8 13" className="w-2 h-3 text-primary fill-current">
+                        <path d="M8 0 L0 0 L0 13 C0 13 0 6 8 0" />
+                      </svg>
+                    </div>
+                  )}
+                </div>
               </div>
             );
           } else if (item.type === 'image') {
             // Generated Image
             const img = item.data;
             return (
-              <div key={`gen-img-${img.timestamp}-${index}`} className="flex justify-start animate-fade-in">
-                <Card className="max-w-[80%] p-4 bg-gradient-to-br from-purple-500/10 to-blue-500/10 border-purple-500/30">
+              <div key={`gen-img-${img.timestamp}-${index}`} className="flex justify-start animate-fade-in w-full">
+                <Card className="p-2 md:p-4 bg-gradient-to-br from-purple-500/10 to-blue-500/10 border-purple-500/30">
                   <div className="flex items-center gap-2 mb-3">
                     <div className="p-1.5 rounded-full bg-purple-500/20">
                       <Image className="h-4 w-4 text-purple-500" />
@@ -878,90 +1015,21 @@ export function SessionPage() {
             // Tool Execution
             const exec = item.data;
             return (
-              <div key={`tool-${exec.toolId}-${index}`} className="flex justify-start animate-fade-in max-w-[80%]">
+              <div key={`tool-${exec.toolId}-${index}`} className="flex justify-start animate-fade-in w-full">
                 <ToolExecutionCard execution={exec} />
               </div>
             );
           }
         })}
 
-        {/* Activity indicator */}
-        {(currentActivity.type === 'thinking' || currentActivity.type === 'tool' || currentActiveAgent) && !currentStreamingContent && (
-          <div className="flex justify-start animate-fade-in">
-            <Card className={cn(
-              "border p-4",
-              currentActiveAgent ? "bg-purple-500/10 border-purple-500/30" :
-              currentActivity.type === 'tool' ? "bg-blue-500/10 border-blue-500/30" : "bg-card"
-            )}>
-              <div className="flex items-center gap-3">
-                {/* Active Agent indicator - highest priority */}
-                {currentActiveAgent ? (
-                  <>
-                    <div className="relative">
-                      <Brain className="h-5 w-5 text-purple-500" />
-                      <span className="absolute -top-1 -right-1 w-2 h-2 bg-purple-500 rounded-full animate-ping" />
-                    </div>
-                    <div className="flex flex-col">
-                      <span className="text-sm font-medium text-purple-600 dark:text-purple-400">
-                        Agent: {getAgentDisplay(currentActiveAgent.agentType)}
-                      </span>
-                      {currentActiveAgent.description && (
-                        <span className="text-xs text-muted-foreground">{currentActiveAgent.description}</span>
-                      )}
-                      <span className="text-xs text-muted-foreground/60 font-mono">{currentActiveAgent.agentType}</span>
-                    </div>
-                  </>
-                ) : currentActivity.type === 'thinking' ? (
-                  <>
-                    <Brain className="h-5 w-5 text-amber-500 animate-pulse" />
-                    <div className="flex flex-col">
-                      <span className="text-sm font-medium">Claude is thinking...</span>
-                      <span className="text-xs text-muted-foreground">Analyzing request</span>
-                    </div>
-                  </>
-                ) : currentActivity.type === 'tool' && currentActivity.toolName ? (
-                  <>
-                    {(() => {
-                      const { icon: ToolIcon, label } = getToolDisplay(currentActivity.toolName);
-                      return (
-                        <>
-                          <div className="relative">
-                            <ToolIcon className="h-5 w-5 text-blue-500" />
-                            <span className="absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-full animate-ping" />
-                          </div>
-                          <div className="flex flex-col">
-                            <span className="text-sm font-medium text-blue-600 dark:text-blue-400">{label}</span>
-                            <span className="text-xs text-muted-foreground font-mono">{currentActivity.toolName}</span>
-                          </div>
-                        </>
-                      );
-                    })()}
-                  </>
-                ) : (
-                  <>
-                    <div className="flex gap-1">
-                      <span className="w-2 h-2 bg-current rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="w-2 h-2 bg-current rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="w-2 h-2 bg-current rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                    </div>
-                    <span className="text-sm text-muted-foreground">Working...</span>
-                  </>
-                )}
-              </div>
-            </Card>
-          </div>
-        )}
-
-        {/* Streaming content */}
+        {/* Streaming content - at the end */}
         {currentStreamingContent && (
           <div className="flex justify-start animate-fade-in">
             <StreamingContent
               content={currentStreamingContent}
               onResponse={(response) => {
                 if (id) {
-                  // Use sendInput for interactive prompts (raw input without saving to DB)
                   socketService.sendInput(id, response);
-                  // Clear streaming content after responding to prompt
                   clearStreamingContent(id);
                 }
               }}
@@ -969,86 +1037,56 @@ export function SessionPage() {
           </div>
         )}
 
-        <div ref={messagesEndRef} />
+                {/* Scroll anchor */}
+                <div ref={messagesEndRef} />
+              </div>
+            </div>
+
+            {/* Scroll to bottom button */}
+            {showScrollButton && (
+              <button
+                onClick={scrollToBottom}
+                className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-primary text-primary-foreground shadow-lg hover:bg-primary/90 transition-all text-sm font-medium animate-fade-in"
+              >
+                <ChevronDown className="h-4 w-4" />
+                <span className="hidden sm:inline">New messages</span>
+              </button>
+            )}
           </>
         )}
         </div>
 
-        {/* Right Sidebar - Todos & Git (hidden on mobile unless mobileView is 'git' or 'todos') */}
-        <div className={cn(
-          "shrink-0 transition-all duration-200",
-          showTodos ? "w-72" : "w-10",
-          // Mobile: hide unless mobileView is 'git' or 'todos'
-          (mobileView !== 'git' && mobileView !== 'todos') && "hidden md:block",
-          (mobileView === 'git' || mobileView === 'todos') && "md:block w-full md:w-72"
-        )}>
-          <Card className="h-full flex flex-col bg-card/50 backdrop-blur-sm border">
-            {/* Sidebar Header with Tabs */}
-            <div className="shrink-0 p-2 border-b">
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setShowTodos(!showTodos)}
-                  className="p-1 hover:bg-muted rounded-sm transition-colors"
-                >
-                  {showTodos ? (
-                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
+        {/* Right Panel - Files/Todos/Git (only shown when a panel is selected via sidebar buttons) */}
+        {rightPanelTab && (
+          <div className={cn(
+            "shrink-0 w-72 transition-all duration-200",
+            // Mobile: hide unless mobileView matches
+            (mobileView !== 'git' && mobileView !== 'todos' && mobileView !== 'files') && "hidden md:block",
+            (mobileView === 'git' || mobileView === 'todos' || mobileView === 'files') && "md:block w-full md:w-72"
+          )}>
+            <Card className="h-full flex flex-col bg-card/50 backdrop-blur-sm border">
+              {/* Panel Header */}
+              <div className="shrink-0 p-2 border-b">
+                <div className="flex items-center gap-2 px-1">
+                  {rightPanelTab === 'files' && <FolderOpen className="h-4 w-4 text-muted-foreground" />}
+                  {rightPanelTab === 'todos' && <ListTodo className="h-4 w-4 text-muted-foreground" />}
+                  {rightPanelTab === 'git' && <GitBranch className="h-4 w-4 text-muted-foreground" />}
+                  <span className="text-sm font-medium">
+                    {rightPanelTab === 'files' && 'Files'}
+                    {rightPanelTab === 'todos' && 'Tasks'}
+                    {rightPanelTab === 'git' && 'Git'}
+                  </span>
+                  {rightPanelTab === 'todos' && currentTodos.length > 0 && (
+                    <span className="px-1.5 py-0.5 text-[10px] rounded-full bg-muted text-muted-foreground">
+                      {currentTodos.filter(t => t.status !== 'completed').length}
+                    </span>
                   )}
-                </button>
-
-                {showTodos && (
-                  <div className="flex gap-1 flex-1 bg-muted rounded-lg p-0.5">
-                    <button
-                      onClick={() => setRightPanelTab('files')}
-                      className={cn(
-                        "flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors",
-                        rightPanelTab === 'files'
-                          ? "bg-background text-foreground shadow-sm"
-                          : "text-muted-foreground hover:text-foreground"
-                      )}
-                    >
-                      <FolderOpen className="h-3.5 w-3.5" />
-                      Files
-                    </button>
-                    <button
-                      onClick={() => setRightPanelTab('todos')}
-                      className={cn(
-                        "flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors",
-                        rightPanelTab === 'todos'
-                          ? "bg-background text-foreground shadow-sm"
-                          : "text-muted-foreground hover:text-foreground"
-                      )}
-                    >
-                      <ListTodo className="h-3.5 w-3.5" />
-                      Tasks
-                      {currentTodos.length > 0 && (
-                        <span className="px-1 py-0.5 text-[10px] rounded-full bg-muted">
-                          {currentTodos.filter(t => t.status !== 'completed').length}
-                        </span>
-                      )}
-                    </button>
-                    <button
-                      onClick={() => setRightPanelTab('git')}
-                      className={cn(
-                        "flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors",
-                        rightPanelTab === 'git'
-                          ? "bg-background text-foreground shadow-sm"
-                          : "text-muted-foreground hover:text-foreground"
-                      )}
-                    >
-                      <GitBranch className="h-3.5 w-3.5" />
-                      Git
-                    </button>
-                  </div>
-                )}
+                </div>
               </div>
-            </div>
 
-            {/* Content */}
-            {showTodos && (
+              {/* Panel Content */}
               <div className="flex-1 min-h-0 overflow-hidden">
-                {rightPanelTab === 'files' ? (
+                {rightPanelTab === 'files' && (
                   <FileTree
                     workingDirectory={session.workingDirectory}
                     selectedFile={currentSelectedFile || null}
@@ -1056,7 +1094,8 @@ export function SessionPage() {
                     onFileOpen={(path, content) => id && openFileInStore(id, path, content)}
                     className="h-full"
                   />
-                ) : rightPanelTab === 'todos' ? (
+                )}
+                {rightPanelTab === 'todos' && (
                   <div className="p-2 space-y-2 overflow-auto h-full">
                     {currentTodos.length === 0 ? (
                       <div className="text-center py-4 text-sm text-muted-foreground">
@@ -1100,23 +1139,18 @@ export function SessionPage() {
                       ))
                     )}
                   </div>
-                ) : (
+                )}
+                {rightPanelTab === 'git' && (
                   <GitPanel workingDirectory={session.workingDirectory} className="h-full" />
                 )}
               </div>
-            )}
-          </Card>
-        </div>
+            </Card>
+          </div>
+        )}
       </div>
 
       {/* Input */}
-      <div className="shrink-0 pt-4 border-t space-y-3">
-        {showSavedIndicator && (
-          <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground animate-fade-in">
-            <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
-            <span>Response saved</span>
-          </div>
-        )}
+      <div className="shrink-0 pt-1 md:pt-4 border-t space-y-1 md:space-y-3">
         {/* Image attachments preview */}
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-2 p-3 rounded-xl bg-muted/50 border animate-scale-in">
@@ -1139,7 +1173,7 @@ export function SessionPage() {
           </div>
         )}
 
-        <form onSubmit={handleSend} className="flex gap-2 items-center">
+        <form onSubmit={handleSend} className="flex gap-2 items-center px-1">
           {/* Hidden file input */}
           <input
             ref={fileInputRef}
@@ -1150,17 +1184,25 @@ export function SessionPage() {
             onChange={handleFileSelect}
           />
 
-          {/* Image upload button */}
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={() => fileInputRef.current?.click()}
-            className="h-10 w-10 shrink-0"
-            title="Add image (or paste/drop)"
-          >
-            <Paperclip className="h-5 w-5" />
-          </Button>
+          {/* Image upload button / Working indicator - desktop only */}
+          <div className="hidden md:flex">
+            {(currentActivity.type === 'thinking' || currentActivity.type === 'tool' || currentStreamingContent) ? (
+              <div className="h-10 w-10 shrink-0 flex items-center justify-center">
+                <Brain className="h-5 w-5 text-primary animate-pulse" />
+              </div>
+            ) : (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => fileInputRef.current?.click()}
+                className="h-10 w-10 shrink-0"
+                title="Add image (or paste/drop)"
+              >
+                <Paperclip className="h-5 w-5" />
+              </Button>
+            )}
+          </div>
 
           {/* Text input */}
           <div className="flex-1 flex items-center relative">
@@ -1178,75 +1220,86 @@ export function SessionPage() {
                 onClose={() => setShowCommandMenu(false)}
               />
             )}
-            <textarea
-              ref={textareaRef}
-              value={input}
-              rows={1}
-              onChange={(e) => {
-                const value = e.target.value;
-                setInput(value);
-                // Show command menu when typing /
-                if (value.startsWith('/') && !value.includes(' ')) {
-                  setShowCommandMenu(true);
-                  setCommandMenuIndex(0);
-                } else {
-                  setShowCommandMenu(false);
-                }
-              }}
-              onKeyDown={(e) => {
-                if (showCommandMenu) {
-                  const filteredCommands = commands?.filter(cmd =>
-                    cmd.name.toLowerCase().includes((input.slice(1) || '').toLowerCase())
-                  ) || [];
-
-                  if (e.key === 'ArrowDown') {
-                    e.preventDefault();
-                    setCommandMenuIndex(i => Math.min(i + 1, filteredCommands.length - 1));
-                  } else if (e.key === 'ArrowUp') {
-                    e.preventDefault();
-                    setCommandMenuIndex(i => Math.max(i - 1, 0));
-                  } else if (e.key === 'Tab' || e.key === 'Enter') {
-                    e.preventDefault();
-                    const selected = filteredCommands[commandMenuIndex];
-                    if (selected) {
-                      setInput(`/${selected.name} `);
-                      setShowCommandMenu(false);
-                    }
-                  } else if (e.key === 'Escape') {
+            <div className="relative flex-1">
+              <textarea
+                ref={textareaRef}
+                value={input}
+                rows={1}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setInput(value);
+                  // Show command menu when typing /
+                  if (value.startsWith('/') && !value.includes(' ')) {
+                    setShowCommandMenu(true);
+                    setCommandMenuIndex(0);
+                  } else {
                     setShowCommandMenu(false);
                   }
-                } else if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend(e as unknown as React.FormEvent);
+                }}
+                onFocus={() => {
+                  // On mobile, switch to chat view when input is focused
+                  if (mobileView !== 'chat') {
+                    setMobileView('chat');
+                  }
+                  // Scroll input into view after keyboard opens (mobile)
+                  setTimeout(() => {
+                    textareaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                  }, 300);
+                }}
+                onKeyDown={(e) => {
+                  if (showCommandMenu) {
+                    const filteredCommands = commands?.filter(cmd =>
+                      cmd.name.toLowerCase().includes((input.slice(1) || '').toLowerCase())
+                    ) || [];
+
+                    if (e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      setCommandMenuIndex(i => Math.min(i + 1, filteredCommands.length - 1));
+                    } else if (e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      setCommandMenuIndex(i => Math.max(i - 1, 0));
+                    } else if (e.key === 'Tab' || e.key === 'Enter') {
+                      e.preventDefault();
+                      const selected = filteredCommands[commandMenuIndex];
+                      if (selected) {
+                        setInput(`/${selected.name} `);
+                        setShowCommandMenu(false);
+                      }
+                    } else if (e.key === 'Escape') {
+                      setShowCommandMenu(false);
+                    }
+                  } else if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend(e as unknown as React.FormEvent);
+                  }
+                }}
+                placeholder={selectedCliTool
+                  ? `Prompt for ${cliTools?.find(t => t.id === selectedCliTool)?.name}...`
+                  : "Message..."
                 }
-              }}
-              placeholder={selectedCliTool
-                ? `Prompt for ${cliTools?.find(t => t.id === selectedCliTool)?.name}...`
-                : "Message..."
-              }
-              className={cn(
-                "w-full min-h-[48px] max-h-[200px] px-4 py-3 rounded-md border bg-background focus:outline-none focus:ring-2 focus:ring-ring text-base resize-none",
-                selectedCliTool && "border-orange-500/30 focus:ring-orange-500/50"
-              )}
-            />
+                className={cn(
+                  "w-full min-h-[40px] md:min-h-[44px] max-h-[200px] pl-3 pr-10 md:px-4 py-2 md:py-2.5 rounded border bg-background focus:outline-none focus:ring-2 focus:ring-ring text-base resize-none",
+                  selectedCliTool && "border-orange-500/30 focus:ring-orange-500/50"
+                )}
+              />
+              {/* Mobile: attach button inside input / thinking indicator */}
+              <div className="md:hidden absolute right-2 top-1/2 -translate-y-[calc(50%+1px)]">
+                {(currentActivity.type === 'thinking' || currentActivity.type === 'tool' || currentStreamingContent) ? (
+                  <Brain className="h-5 w-5 text-primary animate-pulse" />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="p-1 text-muted-foreground hover:text-foreground transition-colors"
+                    title="Add image"
+                  >
+                    <Paperclip className="h-5 w-5" />
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
 
-          {/* Send button */}
-          <Button
-            type="submit"
-            size="icon"
-            disabled={(!input.trim() && attachments.length === 0) || isSending || isExecutingTool}
-            className={cn(
-              "h-10 w-10 shrink-0",
-              selectedCliTool && "bg-orange-600 hover:bg-orange-700"
-            )}
-          >
-            {isExecutingTool ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Send className="h-4 w-4" />
-            )}
-          </Button>
         </form>
       </div>
 
@@ -1266,18 +1319,99 @@ export function SessionPage() {
         />
       )}
 
-      {/* Mobile Bottom Navigation */}
-      <MobileBottomNav
-        activeView={mobileView}
-        onViewChange={setMobileView}
-        hasOpenFiles={hasOpenFiles}
-        hasTodos={showTodos}
-        changesCount={0}
-        todosCount={currentTodos.length}
-      />
+      {/* Project Settings Modal */}
+      <Dialog open={showProjectSettings} onOpenChange={setShowProjectSettings}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Project Settings</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-6 py-4">
+            {/* Appearance Section */}
+            <div>
+              <h3 className="text-sm font-medium mb-4">Appearance</h3>
 
-      {/* Mobile padding for bottom nav */}
-      <div className="md:hidden h-14" />
+              {/* Desktop Settings */}
+              <div className="space-y-3 mb-6">
+                <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Desktop</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="desktop-font" className="text-xs">Font Family</Label>
+                    <select
+                      id="desktop-font"
+                      className="w-full h-9 px-3 rounded-md border bg-background text-sm"
+                      value={themeSettings.desktop.fontFamily}
+                      onChange={(e) => updateDesktopFont(e.target.value as FontFamily)}
+                    >
+                      <option value="system">System Default</option>
+                      <option value="inter">Inter</option>
+                      <option value="roboto">Roboto</option>
+                      <option value="sf-pro">SF Pro</option>
+                      <option value="jetbrains-mono">JetBrains Mono</option>
+                      <option value="fira-code">Fira Code</option>
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="desktop-size" className="text-xs">Font Size</Label>
+                    <select
+                      id="desktop-size"
+                      className="w-full h-9 px-3 rounded-md border bg-background text-sm"
+                      value={themeSettings.desktop.fontSize}
+                      onChange={(e) => updateDesktopSize(e.target.value as FontSize)}
+                    >
+                      <option value="12">12px</option>
+                      <option value="13">13px</option>
+                      <option value="14">14px</option>
+                      <option value="15">15px</option>
+                      <option value="16">16px</option>
+                      <option value="18">18px</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Mobile Settings */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Mobile</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="mobile-font" className="text-xs">Font Family</Label>
+                    <select
+                      id="mobile-font"
+                      className="w-full h-9 px-3 rounded-md border bg-background text-sm"
+                      value={themeSettings.mobile.fontFamily}
+                      onChange={(e) => updateMobileFont(e.target.value as FontFamily)}
+                    >
+                      <option value="system">System Default</option>
+                      <option value="inter">Inter</option>
+                      <option value="roboto">Roboto</option>
+                      <option value="sf-pro">SF Pro</option>
+                      <option value="jetbrains-mono">JetBrains Mono</option>
+                      <option value="fira-code">Fira Code</option>
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="mobile-size" className="text-xs">Font Size</Label>
+                    <select
+                      id="mobile-size"
+                      className="w-full h-9 px-3 rounded-md border bg-background text-sm"
+                      value={themeSettings.mobile.fontSize}
+                      onChange={(e) => updateMobileSize(e.target.value as FontSize)}
+                    >
+                      <option value="14">14px</option>
+                      <option value="15">15px</option>
+                      <option value="16">16px</option>
+                      <option value="17">17px</option>
+                      <option value="18">18px</option>
+                      <option value="20">20px</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
     </div>
   );
 }

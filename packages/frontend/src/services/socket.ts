@@ -4,8 +4,10 @@ import type {
   ServerToClientEvents,
   BufferedMessage,
   SessionMode,
+  ModelType,
   PermissionAction,
   UserQuestionAnswers,
+  ToolExecution,
 } from '@claude-code-webui/shared';
 import { useAuthStore } from '@/stores/authStore';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -20,6 +22,9 @@ type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 class SocketService {
   private socket: TypedSocket | null = null;
   private subscribedSessions: Set<string> = new Set();
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private currentSessionId: string | null = null;
+  private onSessionNotFound: ((sessionId: string) => void) | null = null;
 
   connect(): TypedSocket {
     if (this.socket?.connected) {
@@ -37,23 +42,34 @@ class SocketService {
     });
 
     this.socket.on('connect', () => {
-      console.log('Socket connected');
+      console.log('[SOCKET] Socket connected successfully');
       // Resubscribe to sessions
       this.subscribedSessions.forEach((sessionId) => {
+        console.log(`[SOCKET] Resubscribing to session: ${sessionId}`);
         this.socket?.emit('session:subscribe', sessionId);
       });
     });
 
     this.socket.on('disconnect', (reason) => {
-      console.log('Socket disconnected:', reason);
+      console.log('[SOCKET] Socket disconnected:', reason);
+    });
+
+    this.socket.on('connect_error', (error) => {
+      console.error('[SOCKET] Connection error:', error);
     });
 
     this.socket.on('session:output', (data) => {
-      console.log(`[SOCKET] session:output received:`, data.content?.substring(0, 50));
-      useSessionStore.getState().appendStreamingContent(data.sessionId, data.content);
+      // Backend sends full accumulated content, not deltas, to avoid ordering issues
+      useSessionStore.getState().setStreamingContent(data.sessionId, data.content);
     });
 
     this.socket.on('session:message', (message) => {
+      console.log(`[SOCKET] session:message received:`, {
+        id: message.id,
+        role: message.role,
+        createdAt: message.createdAt,
+        contentPreview: message.content?.substring(0, 50),
+      });
       const { addMessage, clearStreamingContent } = useSessionStore.getState();
       addMessage(message.sessionId, message);
       clearStreamingContent(message.sessionId);
@@ -91,12 +107,13 @@ class SocketService {
           timestamp: Date.now(),
         });
       } else if (data.toolId) {
-        store.updateToolExecution(data.sessionId, data.toolId, {
-          status: data.status,
-          input: data.input,
-          result: data.result,
-          error: data.error,
-        });
+        // Only include defined values to avoid overwriting with undefined
+        const update: Partial<ToolExecution> = {};
+        if (data.status !== undefined) update.status = data.status as ToolExecution['status'];
+        if (data.input !== undefined) update.input = data.input;
+        if (data.result !== undefined) update.result = data.result;
+        if (data.error !== undefined) update.error = data.error;
+        store.updateToolExecution(data.sessionId, data.toolId, update);
       }
 
       // Update activity indicator
@@ -131,6 +148,28 @@ class SocketService {
       useSessionStore.getState().setUsage(data.sessionId, data);
     });
 
+    this.socket.on('session:restarted', (data) => {
+      console.log(`[SOCKET] session:restarted received for ${data.sessionId}`);
+      const store = useSessionStore.getState();
+      // Clear all local state for this session
+      store.setMessages(data.sessionId, []);
+      store.clearToolExecutions(data.sessionId);
+      store.clearGeneratedImages(data.sessionId);
+      store.setTodos(data.sessionId, []);
+      store.setUsage(data.sessionId, {
+        sessionId: data.sessionId,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        totalTokens: 0,
+        contextWindow: 200000,
+        contextUsedPercent: 0,
+        totalCostUsd: 0,
+        model: '',
+      });
+    });
+
     this.socket.on('session:image', (data) => {
       console.log(`[SOCKET] session:image received:`, data.prompt?.substring(0, 50));
       useSessionStore.getState().addGeneratedImage(data.sessionId, {
@@ -159,6 +198,42 @@ class SocketService {
     this.socket.on('session:question_request', (data) => {
       console.log(`[SOCKET] session:question_request received:`, data.questions.length, 'questions');
       useSessionStore.getState().setPendingUserQuestion(data.sessionId, data);
+    });
+
+    // Handle permission/question resolved (dismiss dialog on other tabs)
+    this.socket.on('session:permission_resolved', (data) => {
+      console.log(`[SOCKET] session:permission_resolved received:`, data.requestId);
+      const store = useSessionStore.getState();
+      const pending = store.pendingPermissions[data.sessionId];
+      if (pending?.requestId === data.requestId) {
+        store.setPendingPermission(data.sessionId, null);
+      }
+    });
+
+    this.socket.on('session:question_resolved', (data) => {
+      console.log(`[SOCKET] session:question_resolved received:`, data.requestId);
+      const store = useSessionStore.getState();
+      const pending = store.pendingUserQuestions[data.sessionId];
+      if (pending?.requestId === data.requestId) {
+        store.setPendingUserQuestion(data.sessionId, null);
+      }
+    });
+
+    this.socket.on('session:cleared', (data) => {
+      console.log(`[SOCKET] session:cleared received for ${data.sessionId}`);
+      const store = useSessionStore.getState();
+      // Clear UI state to match cleared session
+      store.setMessages(data.sessionId, []);
+      store.clearToolExecutions(data.sessionId);
+      store.clearGeneratedImages(data.sessionId);
+    });
+
+    // Handle heartbeat response
+    this.socket.on('heartbeat', (data) => {
+      if (data.status === 'not_found' && this.onSessionNotFound) {
+        console.log(`[SOCKET] heartbeat: session ${data.sessionId} not found, triggering callback`);
+        this.onSessionNotFound(data.sessionId);
+      }
     });
 
     this.socket.on('error', (message) => {
@@ -237,9 +312,47 @@ class SocketService {
   }
 
   disconnect(): void {
+    this.stopHeartbeat();
     this.socket?.disconnect();
     this.socket = null;
     this.subscribedSessions.clear();
+  }
+
+  // Start heartbeat for a session (call when entering SessionPage)
+  startHeartbeat(sessionId: string, onSessionNotFound: (sessionId: string) => void): void {
+    this.stopHeartbeat();
+    this.currentSessionId = sessionId;
+    this.onSessionNotFound = onSessionNotFound;
+
+    // Send heartbeat every 30 seconds
+    this.heartbeatInterval = setInterval(() => {
+      if (this.socket?.connected && this.currentSessionId) {
+        console.log(`[SOCKET] Sending periodic heartbeat for ${this.currentSessionId}`);
+        this.socket.emit('heartbeat', { sessionId: this.currentSessionId });
+      } else {
+        console.log(`[SOCKET] Heartbeat skipped - socket connected: ${this.socket?.connected}, sessionId: ${this.currentSessionId}`);
+      }
+    }, 30000);
+
+    // Send initial heartbeat (with small delay to ensure socket is ready)
+    setTimeout(() => {
+      if (this.socket?.connected && this.currentSessionId) {
+        console.log(`[SOCKET] Sending initial heartbeat for ${this.currentSessionId}`);
+        this.socket.emit('heartbeat', { sessionId: this.currentSessionId });
+      } else {
+        console.log(`[SOCKET] Initial heartbeat skipped - socket connected: ${this.socket?.connected}, sessionId: ${this.currentSessionId}`);
+      }
+    }, 100);
+  }
+
+  // Stop heartbeat (call when leaving SessionPage)
+  stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+    this.currentSessionId = null;
+    this.onSessionNotFound = null;
   }
 
   subscribeToSession(sessionId: string): void {
@@ -310,6 +423,12 @@ class SocketService {
   setSessionMode(sessionId: string, mode: SessionMode): void {
     console.log(`[SOCKET] Setting session ${sessionId} mode to ${mode}`);
     this.socket?.emit('session:set-mode', { sessionId, mode });
+  }
+
+  // Set session model
+  setSessionModel(sessionId: string, model: ModelType): void {
+    console.log(`[SOCKET] Setting session ${sessionId} model to ${model}`);
+    this.socket?.emit('session:set-model', { sessionId, model });
   }
 
   // Request to reconnect to a running session and get buffered messages

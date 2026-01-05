@@ -42,6 +42,10 @@
     /* Effect colors */
     --shadow-color: 30 15% 30%;
     --glow-color: 18 53% 49%;
+
+    /* Theme font settings (set by ThemeProvider) */
+    --font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-size: 14px;
   }
 
   html.dark, :root.dark {
@@ -86,12 +90,15 @@
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    /* Prevent iOS bounce scrolling on the html element */
+    overscroll-behavior: none;
   }
 
   body {
     @apply bg-background text-foreground;
-    /* Space Grotesk is similar to Styrene B - geometric, slightly rounded */
-    font-family: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+    /* Use theme font settings, fallback to Space Grotesk */
+    font-family: var(--font-family, 'Space Grotesk'), ui-sans-serif, system-ui, sans-serif;
+    font-size: var(--font-size, 14px);
     transition: background-color 0.3s ease, color 0.3s ease;
   }
 
@@ -303,6 +310,11 @@
   50% { opacity: 0.7; }
 }
 
+@keyframes thinking-glow {
+  0%, 100% { box-shadow: 0 0 8px hsl(var(--primary) / 0.15), 0 0 16px hsl(var(--primary) / 0.08); }
+  50% { box-shadow: 0 0 12px hsl(var(--primary) / 0.25), 0 0 24px hsl(var(--primary) / 0.12); }
+}
+
 .animate-fade-in {
   animation: fadeIn 0.4s ease-out forwards;
 }
@@ -321,6 +333,10 @@
 
 .animate-pulse-soft {
   animation: pulse-soft 2s ease-in-out infinite;
+}
+
+.animate-thinking-glow {
+  animation: thinking-glow 2s ease-in-out infinite;
 }
 
 /* Staggered animation delays */
@@ -375,4 +391,19 @@
   letter-spacing: -0.025em;
   margin-top: 1.5em;
   margin-bottom: 0.5em;
+}
+
+/* Ensure code blocks scroll horizontally on mobile */
+.prose pre {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.prose code {
+  word-break: break-word;
+}
+
+.prose pre code {
+  word-break: normal;
+  white-space: pre;
 }

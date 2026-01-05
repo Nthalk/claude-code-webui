@@ -62,6 +62,18 @@ interface SessionState {
   openFiles: Record<string, OpenFile[]>;
   activeFileTab: Record<string, string | null>;
 
+  // Right panel state (global, not per-session)
+  rightPanelTab: 'files' | 'todos' | 'git' | null;
+  setRightPanelTab: (tab: 'files' | 'todos' | 'git' | null) => void;
+
+  // Mobile view state (for session pages)
+  mobileView: 'chat' | 'files' | 'git' | 'editor' | 'todos';
+  setMobileView: (view: 'chat' | 'files' | 'git' | 'editor' | 'todos') => void;
+
+  // Mobile menu state (shared between Layout and SessionPage)
+  mobileMenuOpen: boolean;
+  setMobileMenuOpen: (open: boolean) => void;
+
   setSessions: (sessions: Session[]) => void;
   addSession: (session: Session) => void;
   updateSession: (id: string, updates: Partial<Session>) => void;
@@ -71,6 +83,7 @@ interface SessionState {
   setMessages: (sessionId: string, messages: Message[]) => void;
   addMessage: (sessionId: string, message: Message) => void;
 
+  setStreamingContent: (sessionId: string, content: string) => void;
   appendStreamingContent: (sessionId: string, content: string) => void;
   clearStreamingContent: (sessionId: string) => void;
 
@@ -81,6 +94,8 @@ interface SessionState {
   setTodos: (sessionId: string, todos: TodoItem[]) => void;
   setUsage: (sessionId: string, usage: UsageData) => void;
   addGeneratedImage: (sessionId: string, image: Omit<GeneratedImage, 'timestamp'>) => void;
+  clearGeneratedImages: (sessionId: string) => void;
+  setToolExecutions: (sessionId: string, executions: ToolExecution[]) => void;
   addToolExecution: (sessionId: string, execution: ToolExecution) => void;
   updateToolExecution: (sessionId: string, toolId: string, update: Partial<ToolExecution>) => void;
   clearToolExecutions: (sessionId: string) => void;
@@ -117,6 +132,25 @@ export const useSessionStore = create<SessionState>((set) => ({
   selectedFile: {},
   openFiles: {},
   activeFileTab: {},
+  rightPanelTab: (() => {
+    const saved = localStorage.getItem('right-panel-tab');
+    return saved ? (saved as 'files' | 'todos' | 'git' | null) : null;
+  })(),
+
+  setRightPanelTab: (tab) => {
+    if (tab) {
+      localStorage.setItem('right-panel-tab', tab);
+    } else {
+      localStorage.removeItem('right-panel-tab');
+    }
+    set({ rightPanelTab: tab });
+  },
+
+  mobileView: 'chat',
+  setMobileView: (view) => set({ mobileView: view }),
+
+  mobileMenuOpen: false,
+  setMobileMenuOpen: (open) => set({ mobileMenuOpen: open }),
 
   setSessions: (sessions) => set({ sessions }),
 
@@ -144,10 +178,33 @@ export const useSessionStore = create<SessionState>((set) => ({
     })),
 
   addMessage: (sessionId, message) =>
+    set((state) => {
+      const existingMessages = state.messages[sessionId] || [];
+      // Deduplicate: don't add if message with same ID already exists
+      if (existingMessages.some((m) => m.id === message.id)) {
+        return state;
+      }
+      // Ensure message has createdAt, default to now if missing
+      const messageWithTimestamp = message.createdAt
+        ? message
+        : { ...message, createdAt: new Date().toISOString() };
+      // Insert message in chronological order
+      const newMessages = [...existingMessages, messageWithTimestamp].sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+      return {
+        messages: {
+          ...state.messages,
+          [sessionId]: newMessages,
+        },
+      };
+    }),
+
+  setStreamingContent: (sessionId, content) =>
     set((state) => ({
-      messages: {
-        ...state.messages,
-        [sessionId]: [...(state.messages[sessionId] || []), message],
+      streamingContent: {
+        ...state.streamingContent,
+        [sessionId]: content,
       },
     })),
 
@@ -208,13 +265,52 @@ export const useSessionStore = create<SessionState>((set) => ({
       },
     })),
 
-  addToolExecution: (sessionId, execution) =>
+  clearGeneratedImages: (sessionId) =>
     set((state) => ({
-      toolExecutions: {
-        ...state.toolExecutions,
-        [sessionId]: [...(state.toolExecutions[sessionId] || []), execution],
+      generatedImages: {
+        ...state.generatedImages,
+        [sessionId]: [],
       },
     })),
+
+  setToolExecutions: (sessionId, executions) =>
+    set((state) => {
+      const existing = state.toolExecutions[sessionId] || [];
+      // Merge: API data as base, but preserve any socket updates (started tools not yet in DB)
+      const existingMap = new Map(existing.map(e => [e.toolId, e]));
+      const apiMap = new Map(executions.map(e => [e.toolId, e]));
+
+      // Start with API data, then overlay any "started" tools from socket that aren't in API yet
+      const merged: typeof executions = [...executions];
+      for (const [toolId, exec] of existingMap) {
+        if (!apiMap.has(toolId)) {
+          // Tool exists in socket state but not in API - keep it (still in progress)
+          merged.push(exec);
+        }
+      }
+
+      return {
+        toolExecutions: {
+          ...state.toolExecutions,
+          [sessionId]: merged,
+        },
+      };
+    }),
+
+  addToolExecution: (sessionId, execution) =>
+    set((state) => {
+      const existingExecutions = state.toolExecutions[sessionId] || [];
+      // Deduplicate: don't add if tool execution with same ID already exists
+      if (existingExecutions.some((e) => e.toolId === execution.toolId)) {
+        return state;
+      }
+      return {
+        toolExecutions: {
+          ...state.toolExecutions,
+          [sessionId]: [...existingExecutions, execution],
+        },
+      };
+    }),
 
   updateToolExecution: (sessionId, toolId, update) =>
     set((state) => ({

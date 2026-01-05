@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, Settings, Plus, FolderOpen, LogOut, User, Star } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Settings, Plus, FolderOpen, LogOut, User, Star, ListTodo, GitBranch } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -17,16 +17,31 @@ const navItems = [
   { icon: LayoutDashboard, label: 'Dashboard', path: '/' },
 ];
 
+export type RightPanelTab = 'files' | 'todos' | 'git' | null;
+
 interface SidebarProps {
   onNavigate?: () => void;
   mobile?: boolean;
+  rightPanelTab?: RightPanelTab;
+  onRightPanelTabChange?: (tab: RightPanelTab) => void;
+  pendingTaskCount?: number;
 }
 
-export function Sidebar({ onNavigate, mobile }: SidebarProps) {
+export function Sidebar({ onNavigate, mobile, rightPanelTab, onRightPanelTabChange, pendingTaskCount = 0 }: SidebarProps) {
   const location = useLocation();
   const { sessions } = useSessionStore();
   const { user, logout } = useAuthStore();
-  const [collapsed, setCollapsed] = useState(false);
+
+  // Sidebar collapsed state with localStorage persistence
+  const [collapsed, setCollapsedState] = useState(() => {
+    const saved = localStorage.getItem('sidebar-left-collapsed');
+    return saved === 'true';
+  });
+  const setCollapsed = useCallback((value: boolean) => {
+    localStorage.setItem('sidebar-left-collapsed', String(value));
+    setCollapsedState(value);
+  }, []);
+
   const [showStarredOnly, setShowStarredOnly] = useState(false);
 
   // On mobile, never collapse (full width in sheet)
@@ -230,6 +245,69 @@ export function Sidebar({ onNavigate, mobile }: SidebarProps) {
           </div>
         </div>
       </nav>
+
+      {/* Panel Toggle Buttons - Only show on session pages */}
+      {onRightPanelTabChange && (
+        <div className={cn(
+          "p-2 border-t",
+          isCollapsed ? "flex flex-col items-center gap-1" : "flex gap-1"
+        )}>
+          {/* Chat button - returns to chat view (closes panels) */}
+          <Button
+            variant={rightPanelTab === null ? 'secondary' : 'ghost'}
+            size="icon"
+            className={cn(
+              "h-8 w-8 shrink-0",
+              rightPanelTab === null && "bg-primary/10 text-primary"
+            )}
+            onClick={() => onRightPanelTabChange(null)}
+            title="Chat"
+          >
+            <MessageSquare className="h-4 w-4" />
+          </Button>
+          <Button
+            variant={rightPanelTab === 'files' ? 'secondary' : 'ghost'}
+            size="icon"
+            className={cn(
+              "h-8 w-8 shrink-0",
+              rightPanelTab === 'files' && "bg-primary/10 text-primary"
+            )}
+            onClick={() => onRightPanelTabChange(rightPanelTab === 'files' ? null : 'files')}
+            title="Files"
+          >
+            <FolderOpen className="h-4 w-4" />
+          </Button>
+          <Button
+            variant={rightPanelTab === 'todos' ? 'secondary' : 'ghost'}
+            size="icon"
+            className={cn(
+              "h-8 w-8 shrink-0 relative",
+              rightPanelTab === 'todos' && "bg-primary/10 text-primary"
+            )}
+            onClick={() => onRightPanelTabChange(rightPanelTab === 'todos' ? null : 'todos')}
+            title="Tasks"
+          >
+            <ListTodo className="h-4 w-4" />
+            {pendingTaskCount > 0 && (
+              <span className="absolute -top-1 -right-1 h-4 w-4 flex items-center justify-center text-[10px] font-medium bg-blue-500 text-white rounded-full">
+                {pendingTaskCount > 9 ? '9+' : pendingTaskCount}
+              </span>
+            )}
+          </Button>
+          <Button
+            variant={rightPanelTab === 'git' ? 'secondary' : 'ghost'}
+            size="icon"
+            className={cn(
+              "h-8 w-8 shrink-0",
+              rightPanelTab === 'git' && "bg-primary/10 text-primary"
+            )}
+            onClick={() => onRightPanelTabChange(rightPanelTab === 'git' ? null : 'git')}
+            title="Git"
+          >
+            <GitBranch className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
 
       {/* Account Section */}
       <div className="p-2 border-t">

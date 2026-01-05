@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Shield, ShieldAlert, CheckCircle2, XCircle, AlertTriangle, Sparkles, Bot } from 'lucide-react';
+import { Shield, ShieldAlert, CheckCircle2, XCircle, AlertTriangle, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
@@ -439,15 +439,8 @@ function PlanModeIndicator({ message }: { message?: string }) {
 // Claude response with markdown and LaTeX support
 function ClaudeResponse({ message }: { message: string }) {
   return (
-    <div className="flex gap-3">
-      <div className="shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
-        <Bot className="h-4 w-4 text-primary" />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="prose prose-sm dark:prose-invert max-w-none">
-          <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{message}</ReactMarkdown>
-        </div>
-      </div>
+    <div className="prose prose-sm dark:prose-invert max-w-none">
+      <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{message}</ReactMarkdown>
     </div>
   );
 }

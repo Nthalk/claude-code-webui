@@ -4,6 +4,9 @@ import type { SessionStatus } from './session';
 // Session permission mode
 export type SessionMode = 'planning' | 'auto-accept' | 'manual' | 'danger';
 
+// Model type for Claude sessions
+export type ModelType = 'opus' | 'sonnet' | 'haiku';
+
 // Image data for sending to Claude
 export interface ImageAttachmentData {
   data: string; // base64 encoded
@@ -22,6 +25,7 @@ export type PermissionAction = 'allow_once' | 'allow_project' | 'allow_global' |
 
 // Client to Server Events
 export interface ClientToServerEvents {
+  'heartbeat': (data: { sessionId: string }) => void;
   'session:send': (data: {
     sessionId: string;
     message: string;
@@ -48,6 +52,10 @@ export interface ClientToServerEvents {
   'session:set-mode': (data: {
     sessionId: string;
     mode: SessionMode;
+  }) => void;
+  'session:set-model': (data: {
+    sessionId: string;
+    model: ModelType;
   }) => void;
   'session:permission_respond': (data: {
     sessionId: string;
@@ -169,13 +177,18 @@ export interface ServerToClientEvents {
   'session:todos': (data: { sessionId: string; todos: TodoItem[] }) => void;
   'session:usage': (data: UsageData) => void;
   'session:image': (data: GeneratedImageData) => void;
+  'session:restarted': (data: { sessionId: string }) => void;
+  'session:cleared': (data: { sessionId: string }) => void;
   'session:reconnected': (data: {
     sessionId: string;
     bufferedMessages: BufferedMessage[];
     isRunning: boolean;
   }) => void;
   'session:permission_request': (data: PendingPermission) => void;
+  'session:permission_resolved': (data: { sessionId: string; requestId: string }) => void;
   'session:question_request': (data: PendingUserQuestion) => void;
+  'session:question_resolved': (data: { sessionId: string; requestId: string }) => void;
+  'heartbeat': (data: { sessionId: string; status: 'ok' | 'not_found' }) => void;
   error: (message: string) => void;
 }
 

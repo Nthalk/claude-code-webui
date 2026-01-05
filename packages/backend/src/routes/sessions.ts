@@ -3,6 +3,7 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import path from 'path';
 import fs from 'fs/promises';
+import type { Server } from 'socket.io';
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth';
 import { getDatabase } from '../db';
 import { AppError } from '../middleware/errorHandler';
@@ -281,6 +282,77 @@ router.get('/:id/messages', requireAuth, (req, res) => {
     .all(req.params.id);
 
   res.json({ success: true, data: messages });
+});
+
+// Get session tool executions
+router.get('/:id/tool-executions', requireAuth, (req, res) => {
+  const userId = (req as AuthenticatedRequest).userId;
+  const db = getDatabase();
+
+  // Verify session ownership
+  const session = db
+    .prepare('SELECT id FROM sessions WHERE id = ? AND user_id = ?')
+    .get(req.params.id, userId);
+
+  if (!session) {
+    throw new AppError('Session not found', 404, 'NOT_FOUND');
+  }
+
+  const toolExecutions = db
+    .prepare(
+      `SELECT id as toolId, session_id as sessionId, tool_name as toolName,
+              input, result, error, status, created_at as createdAt
+       FROM tool_executions WHERE session_id = ? ORDER BY created_at ASC`
+    )
+    .all(req.params.id);
+
+  // Parse input JSON and add timestamp
+  const parsed = (toolExecutions as Record<string, unknown>[]).map((te) => ({
+    ...te,
+    input: te.input ? JSON.parse(te.input as string) : null,
+    // Convert createdAt to timestamp for frontend sorting
+    timestamp: new Date(te.createdAt as string).getTime(),
+  }));
+
+  res.json({ success: true, data: parsed });
+});
+
+// Delete all messages for a session (clear chat)
+router.delete('/:id/messages', requireAuth, (req, res) => {
+  const userId = (req as AuthenticatedRequest).userId;
+  const db = getDatabase();
+
+  // Verify session ownership
+  const session = db
+    .prepare('SELECT id FROM sessions WHERE id = ? AND user_id = ?')
+    .get(req.params.id, userId);
+
+  if (!session) {
+    throw new AppError('Session not found', 404, 'NOT_FOUND');
+  }
+
+  // Delete all messages and tool executions for this session
+  const messagesResult = db
+    .prepare('DELETE FROM messages WHERE session_id = ?')
+    .run(req.params.id);
+
+  const toolsResult = db
+    .prepare('DELETE FROM tool_executions WHERE session_id = ?')
+    .run(req.params.id);
+
+  // Broadcast to all subscribers so they can refresh their UI
+  const io: Server = req.app.get('io');
+  io.to(`session:${req.params.id}`).emit('session:cleared', {
+    sessionId: req.params.id,
+  });
+
+  res.json({
+    success: true,
+    data: {
+      deletedMessages: messagesResult.changes,
+      deletedToolExecutions: toolsResult.changes,
+    },
+  });
 });
 
 // Serve session images (supports token in query param for browser image loading)

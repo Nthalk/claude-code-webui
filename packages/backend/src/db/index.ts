@@ -117,16 +117,36 @@ function runMigrations(db: Database.Database): void {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Tool executions table
+    CREATE TABLE IF NOT EXISTS tool_executions (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      tool_name TEXT NOT NULL,
+      input TEXT,
+      result TEXT,
+      error TEXT,
+      status TEXT NOT NULL DEFAULT 'started',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Indexes
     CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
     CREATE INDEX IF NOT EXISTS idx_mcp_servers_user_id ON mcp_servers(user_id);
     CREATE INDEX IF NOT EXISTS idx_cli_tools_user_id ON cli_tools(user_id);
+    CREATE INDEX IF NOT EXISTS idx_tool_executions_session_id ON tool_executions(session_id);
   `);
 
   // Migration: Add starred column to existing sessions table
   try {
     db.exec(`ALTER TABLE sessions ADD COLUMN starred INTEGER DEFAULT 0`);
+  } catch {
+    // Column already exists, ignore error
+  }
+
+  // Migration: Add model column to existing sessions table
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN model TEXT DEFAULT 'sonnet'`);
   } catch {
     // Column already exists, ignore error
   }

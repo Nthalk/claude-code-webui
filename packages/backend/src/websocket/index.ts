@@ -130,6 +130,19 @@ export function setupWebSocket(httpServer: HttpServer): Server {
       }
     });
 
+    // Set session model
+    socket.on('session:set-model', ({ sessionId, model }) => {
+      console.log(`Setting session ${sessionId} model to ${model}`);
+      try {
+        processManager.setModel(sessionId, socket.data.userId, model);
+      } catch (err) {
+        socket.emit('session:error', {
+          sessionId,
+          error: err instanceof Error ? err.message : 'Failed to set model',
+        });
+      }
+    });
+
     // Restart session (stop and start fresh)
     socket.on('session:restart', async (sessionId) => {
       console.log(`Restart request for session ${sessionId}`);
@@ -190,6 +203,17 @@ export function setupWebSocket(httpServer: HttpServer): Server {
           error: err instanceof Error ? err.message : 'Failed to generate image',
         });
       }
+    });
+
+    // Heartbeat - check if session is still alive
+    socket.on('heartbeat', ({ sessionId }) => {
+      // Session is "ok" if it has an active process tracked by the manager
+      // "not_found" means backend restarted and lost the session process
+      const hasProcess = processManager.isSessionRunning(sessionId);
+      socket.emit('heartbeat', {
+        sessionId,
+        status: hasProcess ? 'ok' : 'not_found',
+      });
     });
 
     // Reconnect to a running session

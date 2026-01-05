@@ -1,14 +1,20 @@
-import { useAuthStore } from '@/stores/authStore';
-
 const API_BASE = '';
 
 interface RequestConfig extends RequestInit {
   headers?: Record<string, string>;
 }
 
+// Token getter to avoid circular dependency with authStore
+// This is set by authStore after it initializes
+let tokenGetter: (() => string | null) | null = null;
+
+export function setTokenGetter(getter: () => string | null): void {
+  tokenGetter = getter;
+}
+
 class ApiClient {
   private getAuthHeader(): Record<string, string> {
-    const token = useAuthStore.getState().token;
+    const token = tokenGetter?.();
     return token ? { Authorization: `Bearer ${token}` } : {};
   }
 

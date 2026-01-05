@@ -16,6 +16,9 @@
 import * as readline from 'readline';
 import * as http from 'http';
 import * as https from 'https';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 import { URL } from 'url';
 import * as crypto from 'crypto';
 
@@ -100,6 +103,181 @@ interface PermissionResponse {
 // Logging to stderr (doesn't interfere with MCP protocol on stdout)
 function log(message: string): void {
   process.stderr.write(`[WEBUI-MCP] ${message}\n`);
+}
+
+// Settings file structure
+interface ClaudeSettings {
+  permissions?: {
+    allow?: string[];
+    deny?: string[];
+  };
+}
+
+// Load settings from a JSON file
+function loadSettings(filePath: string): ClaudeSettings | null {
+  try {
+    if (fs.existsSync(filePath)) {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      return JSON.parse(content) as ClaudeSettings;
+    }
+  } catch (err) {
+    log(`Failed to load settings from ${filePath}: ${err}`);
+  }
+  return null;
+}
+
+// Get all allowed patterns from global and project settings
+function getAllowedPatterns(projectPath?: string): string[] {
+  const patterns: string[] = [];
+
+  // Load global settings (~/.claude/settings.json and ~/.claude/settings.local.json)
+  const globalSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+  const globalSettings = loadSettings(globalSettingsPath);
+  if (globalSettings?.permissions?.allow) {
+    patterns.push(...globalSettings.permissions.allow);
+    log(`Loaded ${globalSettings.permissions.allow.length} patterns from global settings`);
+  }
+
+  const globalLocalPath = path.join(os.homedir(), '.claude', 'settings.local.json');
+  const globalLocalSettings = loadSettings(globalLocalPath);
+  if (globalLocalSettings?.permissions?.allow) {
+    patterns.push(...globalLocalSettings.permissions.allow);
+    log(`Loaded ${globalLocalSettings.permissions.allow.length} patterns from global local settings`);
+  }
+
+  // Load project settings (<project>/.claude/settings.json and .claude/settings.local.json)
+  if (projectPath) {
+    const projectSettingsPath = path.join(projectPath, '.claude', 'settings.json');
+    const projectSettings = loadSettings(projectSettingsPath);
+    if (projectSettings?.permissions?.allow) {
+      patterns.push(...projectSettings.permissions.allow);
+      log(`Loaded ${projectSettings.permissions.allow.length} patterns from project settings`);
+    }
+
+    const projectLocalPath = path.join(projectPath, '.claude', 'settings.local.json');
+    const projectLocalSettings = loadSettings(projectLocalPath);
+    if (projectLocalSettings?.permissions?.allow) {
+      patterns.push(...projectLocalSettings.permissions.allow);
+      log(`Loaded ${projectLocalSettings.permissions.allow.length} patterns from project local settings`);
+    }
+  }
+
+  return patterns;
+}
+
+// Tools that operate on files and should use glob patterns
+const FILE_TOOLS = ['Read', 'Write', 'Edit', 'Glob'];
+
+// Tools that use prefix matching with :*
+const PREFIX_TOOLS = ['Bash'];
+
+// Get the value to match against for a given tool
+function getMatchValue(toolName: string, toolInput: unknown): string {
+  if (!toolInput || typeof toolInput !== 'object') {
+    return '';
+  }
+
+  const inputObj = toolInput as Record<string, unknown>;
+
+  switch (toolName) {
+    case 'Bash':
+      return String(inputObj.command || '');
+    case 'Read':
+    case 'Write':
+    case 'Edit':
+    case 'Glob':
+      return String(inputObj.file_path || inputObj.pattern || '');
+    case 'Grep':
+      return String(inputObj.pattern || '');
+    case 'WebFetch':
+      return String(inputObj.url || '');
+    case 'WebSearch':
+      return String(inputObj.query || '');
+    default:
+      return '';
+  }
+}
+
+// Convert glob pattern to regex for file matching
+function globToRegex(glob: string): RegExp {
+  let regex = glob
+    // Escape special regex chars except * and ?
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    // ** matches any path (including /)
+    .replace(/\*\*/g, '.*')
+    // * matches anything except /
+    .replace(/(?<!\.)(\*)(?!\*)/g, '[^/]*')
+    // ? matches single char
+    .replace(/\?/g, '.');
+
+  return new RegExp(`^${regex}$`);
+}
+
+// Check if a tool invocation matches a pattern
+function matchesPattern(pattern: string, toolName: string, toolInput: unknown): boolean {
+  // Parse pattern: Tool(content)
+  const match = pattern.match(/^(\w+)\((.*)\)$/);
+  if (!match) {
+    // Simple pattern like "Bash" matches all Bash calls
+    return pattern === toolName;
+  }
+
+  const [, patternTool, patternContent] = match;
+
+  // Tool name must match
+  if (patternTool !== toolName) {
+    return false;
+  }
+
+  // Empty content matches everything for this tool
+  if (!patternContent) {
+    return true;
+  }
+
+  // Get the value to match against
+  const matchValue = getMatchValue(toolName, toolInput);
+
+  // For Bash and other prefix tools, use :* prefix matching
+  if (PREFIX_TOOLS.includes(toolName) && patternContent.endsWith(':*')) {
+    const prefix = patternContent.slice(0, -2);
+    if (!prefix) {
+      return true; // :* alone matches everything
+    }
+    return matchValue.startsWith(prefix);
+  }
+
+  // For file tools, use glob matching
+  if (FILE_TOOLS.includes(toolName)) {
+    // Check if it contains glob wildcards
+    if (patternContent.includes('*') || patternContent.includes('?')) {
+      const regex = globToRegex(patternContent);
+      return regex.test(matchValue);
+    }
+    // Exact match fallback
+    return matchValue === patternContent;
+  }
+
+  // Default: prefix matching with :*
+  if (patternContent.endsWith(':*')) {
+    const prefix = patternContent.slice(0, -2);
+    if (!prefix) {
+      return true;
+    }
+    return matchValue.startsWith(prefix);
+  }
+
+  // Exact match
+  return matchValue === patternContent;
+}
+
+// Check if tool is auto-approved by any pattern
+function isAutoApproved(toolName: string, toolInput: unknown, patterns: string[]): string | null {
+  for (const pattern of patterns) {
+    if (matchesPattern(pattern, toolName, toolInput)) {
+      return pattern;
+    }
+  }
+  return null;
 }
 
 // HTTP request helper
@@ -218,9 +396,9 @@ Usage notes:
     name: 'permission_prompt',
     description: `Request permission from the user to execute a tool. This is called by Claude Code when it needs user approval to run a tool.
 
-Returns JSON with:
-- behavior: "allow" to approve, "deny" to reject
-- updatedInput: optionally modified tool input`,
+Returns JSON with one of:
+- { behavior: "allow", updatedInput: <tool_input> } to approve
+- { behavior: "deny", message: string } to reject`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -357,13 +535,23 @@ function generateSuggestedPattern(tool: string, input: unknown): string {
   }
 }
 
+// Permission prompt response types (matching Claude Code's expected format)
+// To allow: { behavior: "allow", updatedInput: <tool_input_object> }
+// To deny: { behavior: "deny", message: string }
+type PermissionPromptResult =
+  | { behavior: 'allow'; updatedInput: Record<string, unknown> }
+  | { behavior: 'deny'; message: string };
+
 // Handle permission_prompt tool
 async function handlePermissionPrompt(
   sessionId: string,
   backendUrl: string,
   input: PermissionInput
-): Promise<{ behavior: 'allow' | 'deny'; updatedInput?: Record<string, unknown> }> {
+): Promise<PermissionPromptResult> {
   const requestId = crypto.randomUUID();
+
+  // Log raw input for debugging
+  log(`Raw permission input: ${JSON.stringify(input)}`);
 
   // Extract tool name from whichever field is provided
   const toolName = input.tool_name || input.toolName || 'Unknown';
@@ -372,6 +560,7 @@ async function handlePermissionPrompt(
   const toolInput = input.tool_input || input.toolInput || input.input || {};
 
   log(`Handling permission_prompt for tool: ${toolName}`);
+  log(`Tool input: ${JSON.stringify(toolInput)}`);
 
   // POST the permission request to the backend
   const postResult = await makeRequest(`${backendUrl}/api/permissions/request`, {
@@ -388,7 +577,7 @@ async function handlePermissionPrompt(
 
   if (!postResult.success) {
     log(`Backend error: ${postResult.error}`);
-    return { behavior: 'deny' };
+    return { behavior: 'deny', message: postResult.error || 'Backend error' };
   }
 
   // Long-poll for user response
@@ -403,10 +592,10 @@ async function handlePermissionPrompt(
 
   if (pollResult.approved) {
     log('User approved permission');
-    return { behavior: 'allow' };
+    return { behavior: 'allow', updatedInput: toolInput };
   } else {
     log(`User denied permission: ${pollResult.error || 'denied'}`);
-    return { behavior: 'deny' };
+    return { behavior: 'deny', message: pollResult.error || 'User denied permission' };
   }
 }
 
@@ -415,18 +604,20 @@ class WebUIMcpServer {
   private sessionId: string;
   private backendUrl: string;
   private permissionMode: string;
+  private projectPath: string;
   private rl: readline.Interface;
 
   constructor() {
     this.sessionId = process.env.WEBUI_SESSION_ID || '';
     this.backendUrl = process.env.WEBUI_BACKEND_URL || 'http://localhost:3006';
     this.permissionMode = process.env.WEBUI_PERMISSION_MODE || 'auto-accept';
+    this.projectPath = process.env.WEBUI_PROJECT_PATH || process.cwd();
 
     if (!this.sessionId) {
       log('WARNING: No WEBUI_SESSION_ID set, ask_user tool will not work');
     }
 
-    log(`Starting WebUI MCP Server - session: ${this.sessionId}, backend: ${this.backendUrl}, mode: ${this.permissionMode}`);
+    log(`Starting WebUI MCP Server - session: ${this.sessionId}, backend: ${this.backendUrl}, mode: ${this.permissionMode}, project: ${this.projectPath}`);
 
     this.rl = readline.createInterface({
       input: process.stdin,
@@ -596,7 +787,7 @@ class WebUIMcpServer {
             content: [
               {
                 type: 'text',
-                text: JSON.stringify({ behavior: 'deny' }),
+                text: JSON.stringify({ behavior: 'deny', message: 'No session ID configured' }),
               },
             ],
           },
@@ -606,6 +797,7 @@ class WebUIMcpServer {
       try {
         const input = args as unknown as PermissionInput;
         const toolName = input.tool_name || input.toolName || 'Unknown';
+        const toolInput = input.tool_input || input.toolInput || input.input || {};
 
         // In danger mode, auto-approve all permissions
         if (this.permissionMode === 'danger') {
@@ -617,13 +809,35 @@ class WebUIMcpServer {
               content: [
                 {
                   type: 'text',
-                  text: JSON.stringify({ behavior: 'allow' }),
+                  text: JSON.stringify({ behavior: 'allow', updatedInput: toolInput }),
                 },
               ],
             },
           };
         }
 
+        // Check for auto-approval against settings files
+        const allowedPatterns = getAllowedPatterns(this.projectPath);
+        log(`Loaded ${allowedPatterns.length} allowed patterns for auto-approval check`);
+
+        const matchedPattern = isAutoApproved(toolName, toolInput, allowedPatterns);
+        if (matchedPattern) {
+          log(`Auto-approved ${toolName} by pattern: ${matchedPattern}`);
+          return {
+            jsonrpc: '2.0',
+            id,
+            result: {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({ behavior: 'allow', updatedInput: toolInput }),
+                },
+              ],
+            },
+          };
+        }
+
+        log(`No matching pattern for ${toolName}, prompting user`);
         const result = await handlePermissionPrompt(this.sessionId, this.backendUrl, input);
 
         return {
@@ -639,8 +853,8 @@ class WebUIMcpServer {
           },
         };
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        log(`Permission prompt error: ${message}`);
+        const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+        log(`Permission prompt error: ${errorMessage}`);
         return {
           jsonrpc: '2.0',
           id,
@@ -648,7 +862,7 @@ class WebUIMcpServer {
             content: [
               {
                 type: 'text',
-                text: JSON.stringify({ behavior: 'deny' }),
+                text: JSON.stringify({ behavior: 'deny', message: errorMessage }),
               },
             ],
           },

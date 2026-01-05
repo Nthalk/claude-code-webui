@@ -141,12 +141,14 @@ router.get('/response/:requestId', async (req: Request, res: Response) => {
       // Clean up the request
       pendingRequests.delete(requestId);
 
-      console.log(`[PERMISSIONS] Request ${requestId} resolved: ${request.status}`);
+      console.log(`[PERMISSIONS] Request ${requestId} resolved: ${request.status}, approved=${approved}`);
 
-      return res.json({
+      const response = {
         approved,
         pattern,
-      });
+      };
+      console.log(`[PERMISSIONS] Returning response: ${JSON.stringify(response)}`);
+      return res.json(response);
     }
 
     // Wait a bit before checking again
@@ -216,6 +218,14 @@ router.post('/respond', requireAuth, async (req: Request, res: Response) => {
   }
 
   console.log(`[PERMISSIONS] User responded to ${requestId}: ${action}`);
+
+  // Broadcast to all clients that this permission was resolved
+  // This dismisses the dialog on other tabs/devices
+  const io: Server = req.app.get('io');
+  io.to(`session:${request.sessionId}`).emit('session:permission_resolved', {
+    sessionId: request.sessionId,
+    requestId,
+  });
 
   // Note: The long-polling endpoint will pick up this status change
   // and return the response to the permission-prompt script

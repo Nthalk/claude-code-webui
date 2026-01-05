@@ -216,6 +216,14 @@ router.post('/respond', requireAuth, async (req: Request, res: Response) => {
 
   console.log(`[USER-QUESTIONS] User answered ${requestId}:`, JSON.stringify(answers));
 
+  // Broadcast to all clients that this question was resolved
+  // This dismisses the dialog on other tabs/devices
+  const io: Server = req.app.get('io');
+  io.to(`session:${request.sessionId}`).emit('session:question_resolved', {
+    sessionId: request.sessionId,
+    requestId,
+  });
+
   // Note: The MCP server's long-polling endpoint will pick up this status change
   // and return the response. No need to inject tool_result - the MCP server
   // handles the full request/response cycle.
