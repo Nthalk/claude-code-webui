@@ -24,8 +24,9 @@ import { CommandMenu } from '@/components/chat/CommandMenu';
 import { InteractiveOptions, detectOptions, isChoicePrompt } from '@/components/chat/InteractiveOptions';
 import { ToolExecutionCard } from '@/components/chat/ToolExecutionCard';
 import { PermissionApprovalDialog } from '@/components/chat/PermissionApprovalDialog';
+import { UserQuestionDialog } from '@/components/chat/UserQuestionDialog';
 import { useDocumentSwipeGesture } from '@/hooks';
-import type { PermissionAction } from '@claude-code-webui/shared';
+import type { PermissionAction, UserQuestionAnswers } from '@claude-code-webui/shared';
 
 interface ImageAttachment {
   id: string;
@@ -45,11 +46,11 @@ export function SessionPage() {
   const [isSending, setIsSending] = useState(false);
   const [sessionMode, setSessionMode] = useState<SessionMode>('auto-accept');
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const lastMessageIdRef = useRef<string | null>(null);
-  const { messages, streamingContent, activity, activeAgent, todos, generatedImages, toolExecutions, pendingPermissions, setMessages, clearStreamingContent, selectedFile, setSelectedFile, openFile: openFileInStore, openFiles } = useSessionStore();
+  const { messages, streamingContent, activity, activeAgent, todos, generatedImages, toolExecutions, pendingPermissions, pendingUserQuestions, setMessages, clearStreamingContent, selectedFile, setSelectedFile, openFile: openFileInStore, openFiles } = useSessionStore();
   const [showSavedIndicator, setShowSavedIndicator] = useState(false);
   const [selectedCliTool, setSelectedCliTool] = useState<string | null>(null);
   const [isExecutingTool, setIsExecutingTool] = useState(false);
@@ -149,6 +150,7 @@ export function SessionPage() {
   const currentGeneratedImages = generatedImages[id || ''] || [];
   const currentToolExecutions = toolExecutions[id || ''] || [];
   const currentPendingPermission = pendingPermissions[id || ''] || null;
+  const currentPendingUserQuestion = pendingUserQuestions[id || ''] || null;
   const [showTodos, setShowTodos] = useState(true);
   const [rightPanelTab, setRightPanelTab] = useState<'files' | 'todos' | 'git'>('files');
   const [mainView, setMainView] = useState<'chat' | 'editor'>('chat');
@@ -573,6 +575,19 @@ export function SessionPage() {
       console.error('Failed to respond to permission request:', error);
     }
   }, [id, currentPendingPermission]);
+
+  const handleUserQuestionResponse = useCallback(async (answers: UserQuestionAnswers) => {
+    if (!id || !currentPendingUserQuestion) return;
+    try {
+      await socketService.respondToUserQuestion(
+        id,
+        currentPendingUserQuestion.requestId,
+        answers
+      );
+    } catch (error) {
+      console.error('Failed to respond to user question:', error);
+    }
+  }, [id, currentPendingUserQuestion]);
 
   const handleCancelCliTool = () => {
     if (cliToolAbortRef.current) {
@@ -1141,7 +1156,7 @@ export function SessionPage() {
             variant="ghost"
             size="icon"
             onClick={() => fileInputRef.current?.click()}
-            className="h-12 w-12 md:h-10 md:w-10 shrink-0"
+            className="h-10 w-10 shrink-0"
             title="Add image (or paste/drop)"
           >
             <Paperclip className="h-5 w-5" />
@@ -1163,10 +1178,10 @@ export function SessionPage() {
                 onClose={() => setShowCommandMenu(false)}
               />
             )}
-            <input
-              ref={textareaRef as React.RefObject<HTMLInputElement>}
-              type="text"
+            <textarea
+              ref={textareaRef}
               value={input}
+              rows={1}
               onChange={(e) => {
                 const value = e.target.value;
                 setInput(value);
@@ -1210,7 +1225,7 @@ export function SessionPage() {
                 : "Message..."
               }
               className={cn(
-                "w-full h-12 md:h-10 px-4 rounded-xl border bg-background focus:outline-none focus:ring-2 focus:ring-ring text-base md:text-sm",
+                "w-full min-h-[48px] max-h-[200px] px-4 py-3 rounded-md border bg-background focus:outline-none focus:ring-2 focus:ring-ring text-base resize-none",
                 selectedCliTool && "border-orange-500/30 focus:ring-orange-500/50"
               )}
             />
@@ -1222,7 +1237,7 @@ export function SessionPage() {
             size="icon"
             disabled={(!input.trim() && attachments.length === 0) || isSending || isExecutingTool}
             className={cn(
-              "h-12 w-12 md:h-10 md:w-10 shrink-0",
+              "h-10 w-10 shrink-0",
               selectedCliTool && "bg-orange-600 hover:bg-orange-700"
             )}
           >
@@ -1240,6 +1255,14 @@ export function SessionPage() {
         <PermissionApprovalDialog
           permission={currentPendingPermission}
           onRespond={handlePermissionResponse}
+        />
+      )}
+
+      {/* User Question Dialog */}
+      {currentPendingUserQuestion && (
+        <UserQuestionDialog
+          question={currentPendingUserQuestion}
+          onRespond={handleUserQuestionResponse}
         />
       )}
 

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Session, Message, SessionStatus, UsageData, ToolExecution, PendingPermission } from '@claude-code-webui/shared';
+import type { Session, Message, SessionStatus, UsageData, ToolExecution, PendingPermission, PendingUserQuestion } from '@claude-code-webui/shared';
 
 // Activity state for showing what Claude is doing
 export interface ActivityState {
@@ -52,6 +52,7 @@ interface SessionState {
   generatedImages: Record<string, GeneratedImage[]>;
   toolExecutions: Record<string, ToolExecution[]>;
   pendingPermissions: Record<string, PendingPermission | null>;
+  pendingUserQuestions: Record<string, PendingUserQuestion | null>;
 
   // File Tree state
   fileTreeOpen: Record<string, boolean>;
@@ -84,6 +85,7 @@ interface SessionState {
   updateToolExecution: (sessionId: string, toolId: string, update: Partial<ToolExecution>) => void;
   clearToolExecutions: (sessionId: string) => void;
   setPendingPermission: (sessionId: string, permission: PendingPermission | null) => void;
+  setPendingUserQuestion: (sessionId: string, question: PendingUserQuestion | null) => void;
 
   // File Tree actions
   setFileTreeOpen: (sessionId: string, open: boolean) => void;
@@ -110,6 +112,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   generatedImages: {},
   toolExecutions: {},
   pendingPermissions: {},
+  pendingUserQuestions: {},
   fileTreeOpen: {},
   selectedFile: {},
   openFiles: {},
@@ -236,6 +239,14 @@ export const useSessionStore = create<SessionState>((set) => ({
       pendingPermissions: {
         ...state.pendingPermissions,
         [sessionId]: permission,
+      },
+    })),
+
+  setPendingUserQuestion: (sessionId, question) =>
+    set((state) => ({
+      pendingUserQuestions: {
+        ...state.pendingUserQuestions,
+        [sessionId]: question,
       },
     })),
 

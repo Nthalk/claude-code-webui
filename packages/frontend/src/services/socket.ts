@@ -5,6 +5,7 @@ import type {
   BufferedMessage,
   SessionMode,
   PermissionAction,
+  UserQuestionAnswers,
 } from '@claude-code-webui/shared';
 import { useAuthStore } from '@/stores/authStore';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -151,8 +152,13 @@ class SocketService {
     });
 
     this.socket.on('session:permission_request', (data) => {
-      console.log(`[SOCKET] session:permission_request received:`, data.toolName, data.description);
+      console.log(`[SOCKET] session:permission_request received:`, data.toolName);
       useSessionStore.getState().setPendingPermission(data.sessionId, data);
+    });
+
+    this.socket.on('session:question_request', (data) => {
+      console.log(`[SOCKET] session:question_request received:`, data.questions.length, 'questions');
+      useSessionStore.getState().setPendingUserQuestion(data.sessionId, data);
     });
 
     this.socket.on('error', (message) => {
@@ -347,6 +353,40 @@ class SocketService {
 
     // Clear the pending permission from the store
     useSessionStore.getState().setPendingPermission(sessionId, null);
+  }
+
+  // Respond to a user question request
+  async respondToUserQuestion(
+    sessionId: string,
+    requestId: string,
+    answers: UserQuestionAnswers
+  ): Promise<void> {
+    console.log(`[SOCKET] Responding to user question ${requestId}`);
+
+    // Call the backend API to respond (the long-polling endpoint will pick this up)
+    const token = useAuthStore.getState().token;
+    if (!token) {
+      throw new Error('No auth token');
+    }
+
+    const response = await fetch('/api/user-questions/respond', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        requestId,
+        answers,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to respond to user question');
+    }
+
+    // Clear the pending question from the store
+    useSessionStore.getState().setPendingUserQuestion(sessionId, null);
   }
 
   getSocket(): TypedSocket | null {
