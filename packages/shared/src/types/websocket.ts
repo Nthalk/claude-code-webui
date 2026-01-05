@@ -55,6 +55,11 @@ export interface ClientToServerEvents {
     action: PermissionAction;
     pattern?: string;
   }) => void;
+  'session:question_respond': (data: {
+    sessionId: string;
+    requestId: string;
+    answers: UserQuestionAnswers;
+  }) => void;
 }
 
 // Usage data from Claude CLI
@@ -103,6 +108,32 @@ export interface PendingPermission {
   suggestedPattern: string;
 }
 
+// User question option for AskUserQuestion tool
+export interface UserQuestionOption {
+  label: string;
+  description?: string;
+}
+
+// Single question from AskUserQuestion tool
+export interface UserQuestion {
+  question: string;
+  header: string;
+  options: UserQuestionOption[];
+  multiSelect: boolean;
+}
+
+// Pending user question request from Claude
+export interface PendingUserQuestion {
+  sessionId: string;
+  requestId: string;
+  questions: UserQuestion[];
+}
+
+// User's answers to questions
+export interface UserQuestionAnswers {
+  [questionIndex: string]: string | string[]; // index -> selected option label(s) or custom text
+}
+
 // Generated image data
 export interface GeneratedImageData {
   sessionId: string;
@@ -144,6 +175,7 @@ export interface ServerToClientEvents {
     isRunning: boolean;
   }) => void;
   'session:permission_request': (data: PendingPermission) => void;
+  'session:question_request': (data: PendingUserQuestion) => void;
   error: (message: string) => void;
 }
 
