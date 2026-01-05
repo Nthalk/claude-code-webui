@@ -71,3 +71,6 @@ credentials.json
 # Lock files (using pnpm)
 package-lock.json
 yarn.lock
+
+# Auto-generated MCP config
+.mcp.json
