@@ -36,7 +36,7 @@ import * as https from 'https';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { URL } from 'url';
+import { URL, fileURLToPath } from 'url';
 import * as crypto from 'crypto';
 
 // Log to stderr so it doesn't interfere with stdout JSON output
@@ -117,33 +117,136 @@ function getMatchValue(toolName: string, toolInput: unknown): string {
   }
 }
 
+// Tools that operate on files and should use glob patterns
+const FILE_TOOLS = ['Read', 'Write', 'Edit', 'Glob'];
+
+// Tools that use prefix matching with :*
+const PREFIX_TOOLS = ['Bash'];
+
+// Validate pattern syntax and return error if invalid
+export interface PatternValidationError {
+  pattern: string;
+  toolName: string;
+  message: string;
+  suggestion: string;
+}
+
+export function validatePatternSyntax(pattern: string): PatternValidationError | null {
+  // Parse pattern: Tool(content)
+  const match = pattern.match(/^(\w+)\((.*)\)$/);
+  if (!match) {
+    // Simple pattern like "Bash" - valid for any tool
+    return null;
+  }
+
+  const patternTool = match[1];
+  const patternContent = match[2];
+
+  if (!patternTool) {
+    return null;
+  }
+
+  // Check for :* syntax on file tools (should use glob instead)
+  if (FILE_TOOLS.includes(patternTool) && patternContent && patternContent.endsWith(':*')) {
+    const basePattern = patternContent.slice(0, -2);
+    return {
+      pattern,
+      toolName: patternTool,
+      message: `The ":*" syntax is only for Bash prefix rules. Use glob patterns like "*" or "**" for file matching.`,
+      suggestion: `${patternTool}(${basePattern}**)`,
+    };
+  }
+
+  // Check for plain * syntax on Bash (should use :* for prefix matching)
+  if (PREFIX_TOOLS.includes(patternTool) && patternContent) {
+    // Check if using just * without : prefix
+    if (patternContent.endsWith('*') && !patternContent.endsWith(':*')) {
+      const basePattern = patternContent.slice(0, -1);
+      return {
+        pattern,
+        toolName: patternTool,
+        message: `Use ":*" for prefix matching, not just "*".`,
+        suggestion: `${patternTool}(${basePattern}:*)`,
+      };
+    }
+  }
+
+  return null;
+}
+
+// Convert glob pattern to regex for file matching
+function globToRegex(glob: string): RegExp {
+  let regex = glob
+    // Escape special regex chars except * and ?
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    // ** matches any path (including /)
+    .replace(/\*\*/g, '.*')
+    // * matches anything except /
+    .replace(/(?<!\.)(\*)(?!\*)/g, '[^/]*')
+    // ? matches single char
+    .replace(/\?/g, '.');
+
+  return new RegExp(`^${regex}$`);
+}
+
 // Check if a tool invocation matches a pattern
-// Pattern format: Tool(prefix:*) or Tool(:*) for any
+// Pattern format:
+//   - Bash: Tool(prefix:*) or Tool(:*) for prefix matching
+//   - File tools: Tool(glob) for glob matching (e.g., /path/**)
 function matchesPattern(pattern: string, toolName: string, toolInput: unknown): boolean {
-  // Parse pattern: Tool(content:*) or Tool(:*)
-  const match = pattern.match(/^(\w+)\((.*):\*\)$/);
+  // Parse pattern: Tool(content)
+  const match = pattern.match(/^(\w+)\((.*)\)$/);
   if (!match) {
     // Simple pattern like "Bash" matches all Bash calls
     return pattern === toolName;
   }
 
-  const [, patternTool, patternPrefix] = match;
+  const [, patternTool, patternContent] = match;
 
   // Tool name must match
   if (patternTool !== toolName) {
     return false;
   }
 
-  // Empty prefix matches everything for this tool
-  if (!patternPrefix) {
+  // Empty content matches everything for this tool
+  if (!patternContent) {
     return true;
   }
 
   // Get the value to match against
   const matchValue = getMatchValue(toolName, toolInput);
 
-  // Check if the value starts with the pattern prefix
-  return matchValue.startsWith(patternPrefix);
+  // For Bash and other prefix tools, use :* prefix matching
+  if (PREFIX_TOOLS.includes(toolName) && patternContent.endsWith(':*')) {
+    const prefix = patternContent.slice(0, -2);
+    if (!prefix) {
+      return true; // :* alone matches everything
+    }
+    return matchValue.startsWith(prefix);
+  }
+
+  // For file tools, use glob matching
+  if (FILE_TOOLS.includes(toolName)) {
+    // Check if it contains glob wildcards
+    if (patternContent.includes('*') || patternContent.includes('?')) {
+      const regex = globToRegex(patternContent);
+      return regex.test(matchValue);
+    }
+    // Exact match fallback
+    return matchValue === patternContent;
+  }
+
+  // Default: prefix matching with :*
+  if (patternContent.endsWith(':*')) {
+    const prefix = patternContent.slice(0, -2);
+    if (!prefix) {
+      return true;
+    }
+    return matchValue.startsWith(prefix);
+  }
+
+  // Exact match
+  return matchValue === patternContent;
 }
 
 // Check if tool is auto-approved by any pattern
@@ -161,6 +264,7 @@ interface HookInput {
   hook_event_name: string;
   tool_name: string;
   tool_input: unknown;
+  tool_use_id?: string; // Claude's unique ID for this tool call
   session_id?: string;
 }
 
@@ -169,6 +273,8 @@ interface BackendResponse {
   requestId?: string;
   approved?: boolean;
   error?: string;
+  // For user questions
+  answers?: Record<string, string | string[]>;
 }
 
 // Output the hook decision (PreToolUse format)
@@ -176,6 +282,7 @@ interface BackendResponse {
 function outputDecision(decision: 'allow' | 'deny', reason?: string): void {
   const output = {
     hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
       permissionDecision: decision,
       ...(reason && { permissionDecisionReason: reason }),
     },
@@ -296,6 +403,10 @@ function formatDescription(tool: string, input: unknown): string {
 // Generate a suggested pattern for the permission
 function generateSuggestedPattern(tool: string, input: unknown): string {
   if (!input || typeof input !== 'object') {
+    // Use appropriate syntax based on tool type
+    if (FILE_TOOLS.includes(tool)) {
+      return `${tool}(**)`;
+    }
     return `${tool}(:*)`;
   }
 
@@ -304,7 +415,7 @@ function generateSuggestedPattern(tool: string, input: unknown): string {
   switch (tool) {
     case 'Bash': {
       const command = String(inputObj.command || '');
-      // Extract first word or two for the pattern
+      // Extract first word or two for the pattern (use :* for prefix matching)
       const parts = command.split(/\s+/);
       if (parts.length >= 2) {
         return `Bash(${parts[0]} ${parts[1]}:*)`;
@@ -315,13 +426,23 @@ function generateSuggestedPattern(tool: string, input: unknown): string {
     case 'Write':
     case 'Edit': {
       const filePath = String(inputObj.file_path || '');
-      // Extract directory pattern
+      // Extract directory pattern (use ** glob for file matching)
       const lastSlash = filePath.lastIndexOf('/');
       if (lastSlash > 0) {
         const dir = filePath.substring(0, lastSlash + 1);
-        return `${tool}(${dir}:*)`;
+        return `${tool}(${dir}**)`;
       }
-      return `${tool}(:*)`;
+      return `${tool}(**)`;
+    }
+    case 'Glob': {
+      const pattern = String(inputObj.pattern || '');
+      // For Glob, the pattern is already a glob, suggest based on path
+      if (pattern.includes('/')) {
+        const lastSlash = pattern.lastIndexOf('/');
+        const dir = pattern.substring(0, lastSlash + 1);
+        return `Glob(${dir}**)`;
+      }
+      return `Glob(**)`;
     }
     default:
       return `${tool}(:*)`;
@@ -367,11 +488,30 @@ async function main(): Promise<void> {
     // Extract tool info from hook input
     const toolName = hookInput.tool_name;
     const toolInput = hookInput.tool_input;
+    const toolUseId = hookInput.tool_use_id;
+
+    // Log full hook input for debugging
+    log(`Full hook input keys: ${Object.keys(hookInput).join(', ')}`);
+    if (toolUseId) {
+      log(`Tool use ID: ${toolUseId}`);
+    }
 
     if (!toolName) {
       // No tool name - exit to let Claude Code use default behavior
       log('No tool_name in input, exiting to use default behavior');
       process.exit(0);
+    }
+
+    // Redirect AskUserQuestion to our MCP tool
+    // The built-in AskUserQuestion doesn't work well in WebUI context,
+    // so we deny it and tell Claude to use our MCP tool instead.
+    if (toolName === 'AskUserQuestion') {
+      log('Detected AskUserQuestion - redirecting to MCP tool mcp__webui__ask_user');
+      outputDecision(
+        'deny',
+        'AskUserQuestion is not available in WebUI mode. Use the mcp__webui__ask_user tool instead to ask the user questions. It has the same interface.'
+      );
+      return;
     }
 
     // Load allowed patterns and check for auto-approval
@@ -441,8 +581,16 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  log(`Uncaught error: ${err}`);
-  outputDecision('deny', 'Script error');
-  process.exit(1);
-});
+// Only run main() when executed directly as a script, not when imported as a module
+// In ESM, we check if the file was invoked directly via tsx/node
+const currentFile = fileURLToPath(import.meta.url);
+const entryPoint = process.argv[1] ? path.resolve(process.argv[1]) : '';
+const isMainModule = currentFile === entryPoint;
+
+if (isMainModule) {
+  main().catch((err) => {
+    log(`Uncaught error: ${err}`);
+    outputDecision('deny', 'Script error');
+    process.exit(1);
+  });
+}

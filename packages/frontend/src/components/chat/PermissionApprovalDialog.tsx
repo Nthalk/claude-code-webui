@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import {
   Shield,
   ShieldCheck,
@@ -12,8 +12,60 @@ import {
   Search,
   Edit3,
   Wrench,
+  AlertTriangle,
 } from 'lucide-react';
 import type { PendingPermission, PermissionAction } from '@claude-code-webui/shared';
+
+// Tools that operate on files and should use glob patterns
+const FILE_TOOLS = ['Read', 'Write', 'Edit', 'Glob'];
+
+// Tools that use prefix matching with :*
+const PREFIX_TOOLS = ['Bash'];
+
+// Validate pattern syntax and return error if invalid
+interface PatternValidationError {
+  message: string;
+  suggestion: string;
+}
+
+function validatePatternSyntax(pattern: string): PatternValidationError | null {
+  // Parse pattern: Tool(content)
+  const match = pattern.match(/^(\w+)\((.*)\)$/);
+  if (!match) {
+    // Simple pattern like "Bash" - valid for any tool
+    return null;
+  }
+
+  const patternTool = match[1];
+  const patternContent = match[2];
+
+  if (!patternTool) {
+    return null;
+  }
+
+  // Check for :* syntax on file tools (should use glob instead)
+  if (FILE_TOOLS.includes(patternTool) && patternContent && patternContent.endsWith(':*')) {
+    const basePattern = patternContent.slice(0, -2);
+    return {
+      message: `The ":*" syntax is only for Bash prefix rules. Use glob patterns like "*" or "**" for file matching.`,
+      suggestion: `${patternTool}(${basePattern}**)`,
+    };
+  }
+
+  // Check for plain * syntax on Bash (should use :* for prefix matching)
+  if (PREFIX_TOOLS.includes(patternTool) && patternContent) {
+    // Check if using just * without : prefix
+    if (patternContent.endsWith('*') && !patternContent.endsWith(':*')) {
+      const basePattern = patternContent.slice(0, -1);
+      return {
+        message: `Use ":*" for prefix matching, not just "*".`,
+        suggestion: `${patternTool}(${basePattern}:*)`,
+      };
+    }
+  }
+
+  return null;
+}
 
 interface PermissionApprovalDialogProps {
   permission: PendingPermission;
@@ -59,21 +111,55 @@ function getToolPreview(toolName: string, input: unknown): string {
   }
 }
 
+// Convert glob pattern to regex for file matching
+function globToRegex(glob: string): RegExp {
+  let regex = glob
+    // Escape special regex chars except * and ?
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    // ** matches any path (including /)
+    .replace(/\*\*/g, '.*')
+    // * matches anything except / (but not if preceded by another *)
+    .replace(/(?<!\.)(\*)(?!\*)/g, '[^/]*')
+    // ? matches single char
+    .replace(/\?/g, '.');
+
+  return new RegExp(`^${regex}$`);
+}
+
 // Test if a pattern matches a given test string
 function testPattern(pattern: string, testString: string): boolean {
-  // Claude patterns use prefix matching with :* wildcard
-  // e.g., "Bash(git checkout:*)" matches "git checkout main"
-
   // Extract the pattern content (between parentheses)
   const match = pattern.match(/^(\w+)\((.*)\)$/);
   if (!match) return false;
 
-  const [, , patternContent] = match;
-  if (!patternContent) return false;
+  const patternTool = match[1];
+  const patternContent = match[2];
 
-  // Handle :* wildcard (prefix match)
+  if (!patternTool) return false;
+  if (!patternContent && patternContent !== '') return true; // Empty content matches all
+  if (patternContent === '') return true;
+
+  // For Bash and other prefix tools, use :* prefix matching
+  if (PREFIX_TOOLS.includes(patternTool) && patternContent.endsWith(':*')) {
+    const prefix = patternContent.slice(0, -2);
+    if (!prefix) return true;
+    return testString.startsWith(prefix);
+  }
+
+  // For file tools, use glob matching
+  if (FILE_TOOLS.includes(patternTool)) {
+    if (patternContent.includes('*') || patternContent.includes('?')) {
+      const regex = globToRegex(patternContent);
+      return regex.test(testString);
+    }
+    // Exact match fallback
+    return testString === patternContent;
+  }
+
+  // Default: prefix matching with :*
   if (patternContent.endsWith(':*')) {
     const prefix = patternContent.slice(0, -2);
+    if (!prefix) return true;
     return testString.startsWith(prefix);
   }
 
@@ -90,6 +176,25 @@ export function PermissionApprovalDialog({ permission, onRespond }: PermissionAp
   const Icon = getToolIcon(permission.toolName);
   const preview = getToolPreview(permission.toolName, permission.toolInput);
   const testResult = testPattern(pattern, testValue);
+  const validationError = useMemo(() => validatePatternSyntax(pattern), [pattern]);
+
+  // Get help text based on tool type
+  const helpText = useMemo(() => {
+    if (FILE_TOOLS.includes(permission.toolName)) {
+      return (
+        <>
+          Use glob patterns: <code>*</code> matches any filename, <code>**</code> matches any path
+          (e.g., <code>/src/**</code> matches all files in src)
+        </>
+      );
+    }
+    return (
+      <>
+        Use <code>:*</code> suffix for prefix matching (e.g., <code>git:*</code> matches all git
+        commands)
+      </>
+    );
+  }, [permission.toolName]);
 
   const handleRespond = useCallback(
     async (action: PermissionAction) => {
@@ -164,13 +269,34 @@ export function PermissionApprovalDialog({ permission, onRespond }: PermissionAp
                     type="text"
                     value={pattern}
                     onChange={(e) => setPattern(e.target.value)}
-                    className="w-full p-2 bg-muted/30 border border-border rounded text-sm font-mono"
-                    placeholder="e.g., Bash(git checkout:*)"
+                    className={`w-full p-2 bg-muted/30 border rounded text-sm font-mono ${
+                      validationError ? 'border-amber-500' : 'border-border'
+                    }`}
+                    placeholder={
+                      FILE_TOOLS.includes(permission.toolName)
+                        ? 'e.g., Read(/src/**)'
+                        : 'e.g., Bash(git checkout:*)'
+                    }
                   />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Use <code>:*</code> suffix for prefix matching (e.g., <code>git:*</code> matches
-                    all git commands)
-                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">{helpText}</p>
+
+                  {validationError && (
+                    <div className="mt-2 p-2 bg-amber-500/10 border border-amber-500/30 rounded">
+                      <div className="flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400">
+                        <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                        <div>
+                          <p>{validationError.message}</p>
+                          <button
+                            type="button"
+                            className="mt-1 text-amber-700 dark:text-amber-300 underline hover:no-underline"
+                            onClick={() => setPattern(validationError.suggestion)}
+                          >
+                            Use suggested: <code>{validationError.suggestion}</code>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div>

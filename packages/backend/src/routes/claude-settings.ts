@@ -8,10 +8,14 @@
  * Settings file format:
  * {
  *   "permissions": {
- *     "allow": ["Bash(git:*)", "Read(/src/:*)"],
+ *     "allow": ["Bash(git:*)", "Read(/src/**)"],
  *     "deny": []
  *   }
  * }
+ *
+ * Pattern syntax:
+ * - Bash: Use :* for prefix matching (e.g., "Bash(git:*)")
+ * - File tools (Read, Write, Edit, Glob): Use glob patterns (e.g., "Read(/src/**)")
  */
 
 import { Router, Request, Response } from 'express';
@@ -22,6 +26,7 @@ import os from 'os';
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth';
 import { AppError, asyncHandler } from '../middleware/errorHandler';
 import { getDatabase } from '../db';
+import { validatePatternSyntax, type PatternValidationError } from '../cli/permission-prompt';
 
 const router = Router();
 
@@ -96,6 +101,18 @@ async function getSessionWorkingDirectory(sessionId: string, userId: string): Pr
   return session?.working_directory || null;
 }
 
+// Validate all patterns in a list and return errors
+function validatePatterns(patterns: string[]): PatternValidationError[] {
+  const errors: PatternValidationError[] = [];
+  for (const pattern of patterns) {
+    const error = validatePatternSyntax(pattern);
+    if (error) {
+      errors.push(error);
+    }
+  }
+  return errors;
+}
+
 /**
  * GET /api/claude-settings/global
  * Get global Claude settings
@@ -104,13 +121,18 @@ router.get('/global', requireAuth, asyncHandler(async (_req: Request, res: Respo
   const settingsPath = getGlobalSettingsPath();
   const settings = await readSettingsFile(settingsPath);
 
+  const allowPatterns = settings.permissions?.allow || [];
+  const denyPatterns = settings.permissions?.deny || [];
+  const patternErrors = validatePatterns([...allowPatterns, ...denyPatterns]);
+
   res.json({
     success: true,
     data: {
       path: settingsPath,
       settings,
-      allowPatterns: settings.permissions?.allow || [],
-      denyPatterns: settings.permissions?.deny || [],
+      allowPatterns,
+      denyPatterns,
+      patternErrors: patternErrors.length > 0 ? patternErrors : undefined,
     },
   });
 }));
@@ -135,14 +157,19 @@ router.get('/project/:sessionId', requireAuth, asyncHandler(async (req: Request,
   const settingsPath = getProjectSettingsPath(workingDirectory);
   const settings = await readSettingsFile(settingsPath);
 
+  const allowPatterns = settings.permissions?.allow || [];
+  const denyPatterns = settings.permissions?.deny || [];
+  const patternErrors = validatePatterns([...allowPatterns, ...denyPatterns]);
+
   res.json({
     success: true,
     data: {
       path: settingsPath,
       projectPath: workingDirectory,
       settings,
-      allowPatterns: settings.permissions?.allow || [],
-      denyPatterns: settings.permissions?.deny || [],
+      allowPatterns,
+      denyPatterns,
+      patternErrors: patternErrors.length > 0 ? patternErrors : undefined,
     },
   });
 }));
@@ -159,6 +186,12 @@ router.post('/add-pattern', requireAuth, asyncHandler(async (req: Request, res: 
   }
 
   const { pattern, type, scope, projectPath } = parsed.data;
+
+  // Validate pattern syntax
+  const validationError = validatePatternSyntax(pattern);
+  if (validationError) {
+    console.log(`[CLAUDE-SETTINGS] Pattern syntax warning for "${pattern}": ${validationError.message}`);
+  }
 
   let settingsPath: string;
   let actualProjectPath: string | undefined;
@@ -208,6 +241,12 @@ router.post('/add-pattern', requireAuth, asyncHandler(async (req: Request, res: 
       path: settingsPath,
       projectPath: actualProjectPath,
       patterns: patterns,
+      warning: validationError
+        ? {
+            message: validationError.message,
+            suggestion: validationError.suggestion,
+          }
+        : undefined,
     },
   });
 }));
