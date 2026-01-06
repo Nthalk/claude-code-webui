@@ -16,6 +16,7 @@ const router = Router();
 const createSessionSchema = z.object({
   name: z.string().min(1).max(100),
   workingDirectory: z.string().optional(), // Optional - will be auto-generated from name
+  projectId: z.string().optional(), // Optional - link to existing project
 });
 
 const updateSessionSchema = z.object({
@@ -103,10 +104,11 @@ router.post('/', requireAuth, async (req, res) => {
     throw new AppError('Invalid input', 400, 'VALIDATION_ERROR');
   }
 
-  const { name, workingDirectory: providedWorkingDir } = parsed.data;
+  const { name, workingDirectory: providedWorkingDir, projectId } = parsed.data;
   const db = getDatabase();
 
   let workingDirectory: string;
+  let finalProjectId: string | null = null;
 
   if (providedWorkingDir) {
     // User selected an existing folder - use it directly
@@ -155,12 +157,42 @@ router.post('/', requireAuth, async (req, res) => {
     await ensureDir(workingDirectory);
   }
 
+  // Handle project linkage
+  if (projectId) {
+    // Verify project exists and belongs to user
+    const project = db.prepare(`
+      SELECT id FROM projects WHERE id = ? AND user_id = ?
+    `).get(projectId, userId);
+
+    if (project) {
+      finalProjectId = projectId;
+    }
+  } else if (workingDirectory) {
+    // Try to find or create a project for this working directory
+    const existingProject = db.prepare(`
+      SELECT id FROM projects WHERE path = ? AND user_id = ?
+    `).get(workingDirectory, userId) as any;
+
+    if (existingProject) {
+      finalProjectId = existingProject.id;
+    } else {
+      // Create a new project
+      finalProjectId = nanoid();
+      const projectName = path.basename(workingDirectory);
+
+      db.prepare(`
+        INSERT INTO projects (id, user_id, name, path, is_discovered, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `).run(finalProjectId, userId, projectName, workingDirectory);
+    }
+  }
+
   const sessionId = nanoid();
 
   db.prepare(
-    `INSERT INTO sessions (id, user_id, name, working_directory)
-     VALUES (?, ?, ?, ?)`
-  ).run(sessionId, userId, name, workingDirectory);
+    `INSERT INTO sessions (id, user_id, name, working_directory, project_id)
+     VALUES (?, ?, ?, ?, ?)`
+  ).run(sessionId, userId, name, workingDirectory, finalProjectId);
 
   const newSession = db
     .prepare(

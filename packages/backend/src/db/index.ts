@@ -236,6 +236,49 @@ function runMigrations(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_todos_session_id ON todos(session_id);
     CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status);
   `);
+
+  // Migration: Create projects table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      path TEXT NOT NULL,
+      claude_project_path TEXT,
+      is_discovered INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id, path)
+    );
+    CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
+  `);
+
+  // Migration: Add project_id to sessions table
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL`);
+  } catch {
+    // Column already exists, ignore error
+  }
+
+  // Migration: Create token_usage table for tracking session token usage
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS token_usage (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+      total_tokens INTEGER NOT NULL DEFAULT 0,
+      context_window INTEGER,
+      context_used_percent REAL,
+      total_cost_usd REAL,
+      model TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_token_usage_session_id ON token_usage(session_id);
+  `);
 }
 
 export { db };

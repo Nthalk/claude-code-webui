@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { FolderBrowserDialog } from '@/components/ui/folder-browser';
-import { DiscoveredProjects } from '@/components/projects';
+import { Projects } from '@/components/projects';
 import { useSessionStore } from '@/stores/sessionStore';
 import { api } from '@/services/api';
 import { toast } from '@/hooks/use-toast';
@@ -308,7 +308,7 @@ export function DashboardPage() {
       </div>
 
       {/* Discovered Projects */}
-      <DiscoveredProjects />
+      <Projects />
 
       {/* New Session Form */}
       {showNewSession && (

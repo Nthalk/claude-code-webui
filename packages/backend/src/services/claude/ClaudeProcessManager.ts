@@ -568,6 +568,66 @@ export class ClaudeProcessManager {
             model: proc.model,
         });
 
+        // Store token usage in database
+        try {
+            const db = getDatabase();
+            const existingUsage = db.prepare(`
+                SELECT id FROM token_usage WHERE session_id = ?
+            `).get(sessionId) as any;
+
+            if (existingUsage) {
+                // Update existing usage
+                db.prepare(`
+                    UPDATE token_usage SET
+                        input_tokens = ?,
+                        output_tokens = ?,
+                        cache_read_tokens = ?,
+                        cache_creation_tokens = ?,
+                        total_tokens = ?,
+                        context_window = ?,
+                        context_used_percent = ?,
+                        total_cost_usd = ?,
+                        model = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                `).run(
+                    proc.totalInputTokens,
+                    proc.totalOutputTokens,
+                    proc.cacheReadTokens,
+                    proc.cacheCreationTokens,
+                    totalTokens,
+                    proc.contextWindow,
+                    contextUsedPercent,
+                    proc.totalCostUsd,
+                    proc.model,
+                    existingUsage.id
+                );
+            } else {
+                // Insert new usage record
+                db.prepare(`
+                    INSERT INTO token_usage (
+                        id, session_id, input_tokens, output_tokens,
+                        cache_read_tokens, cache_creation_tokens, total_tokens,
+                        context_window, context_used_percent, total_cost_usd, model
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(
+                    nanoid(),
+                    sessionId,
+                    proc.totalInputTokens,
+                    proc.totalOutputTokens,
+                    proc.cacheReadTokens,
+                    proc.cacheCreationTokens,
+                    totalTokens,
+                    proc.contextWindow,
+                    contextUsedPercent,
+                    proc.totalCostUsd,
+                    proc.model
+                );
+            }
+        } catch (error) {
+            console.error(`[USAGE] Failed to store usage in database:`, error);
+        }
+
         // Check for auto-compact if not already compacting or already auto-compacted
         if (!proc.isCompacting && !proc.hasAutoCompacted && contextRemainingPercent < 100) {
             const db = getDatabase();

@@ -74,7 +74,43 @@ export interface GitCommitResult {
   };
 }
 
-// Discovered Project Types
+// Project Types
+export interface Project {
+  id: string;
+  userId: string;
+  name: string;
+  path: string;
+  claudeProjectPath?: string;
+  isDiscovered: boolean;
+  createdAt: string;
+  updatedAt: string;
+  // Additional metadata
+  sessionCount?: number;
+  totalTokens?: number;
+  totalCostUsd?: number;
+  sessions?: ProjectSession[];
+}
+
+export interface ProjectSession {
+  id: string;
+  name: string;
+  status: string;
+  model: string;
+  createdAt: string;
+  updatedAt: string;
+  tokenUsage?: SessionTokenUsage;
+}
+
+export interface SessionTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  totalCostUsd: number;
+}
+
+// Legacy interface for backward compatibility
 export interface DiscoveredProject {
   id: string;
   name: string;

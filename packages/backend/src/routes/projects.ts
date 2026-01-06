@@ -4,7 +4,9 @@ import path from 'path';
 import os from 'os';
 import { requireAuth } from '../middleware/auth';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
-import type { DiscoveredProject } from '@claude-code-webui/shared';
+import { getDatabase } from '../db';
+import { nanoid } from 'nanoid';
+import type { Project } from '@claude-code-webui/shared';
 
 const router = Router();
 
@@ -36,11 +38,48 @@ function getProjectName(projectPath: string): string {
   return path.basename(projectPath);
 }
 
-// Get all discovered projects
-router.get('/', requireAuth, asyncHandler(async (_req, res) => {
-  const projectsDir = getClaudeProjectsDir();
-  const discoveredProjects: DiscoveredProject[] = [];
+// Get all projects (from database and discovered)
+router.get('/', requireAuth, asyncHandler(async (req, res) => {
+  const userId = (req as any).userId;
+  const db = getDatabase();
 
+  // Get all projects from database
+  const dbProjects = db.prepare(`
+    SELECT
+      p.*,
+      COUNT(DISTINCT s.id) as sessionCount,
+      SUM(tu.total_tokens) as totalTokens,
+      SUM(tu.total_cost_usd) as totalCostUsd
+    FROM projects p
+    LEFT JOIN sessions s ON s.project_id = p.id
+    LEFT JOIN token_usage tu ON tu.session_id = s.id
+    WHERE p.user_id = ?
+    GROUP BY p.id
+    ORDER BY p.updated_at DESC
+  `).all(userId) as any[];
+
+  // Convert database projects to API format
+  const projectsMap = new Map<string, Project>();
+
+  for (const dbProject of dbProjects) {
+    const project: Project = {
+      id: dbProject.id,
+      userId: dbProject.user_id,
+      name: dbProject.name,
+      path: dbProject.path,
+      claudeProjectPath: dbProject.claude_project_path,
+      isDiscovered: dbProject.is_discovered === 1,
+      createdAt: dbProject.created_at,
+      updatedAt: dbProject.updated_at,
+      sessionCount: dbProject.sessionCount || 0,
+      totalTokens: dbProject.totalTokens || 0,
+      totalCostUsd: dbProject.totalCostUsd || 0,
+    };
+    projectsMap.set(dbProject.path, project);
+  }
+
+  // Scan for discovered projects
+  const projectsDir = getClaudeProjectsDir();
   try {
     // Check if the projects directory exists
     await fs.access(projectsDir);
@@ -55,98 +94,190 @@ router.get('/', requireAuth, asyncHandler(async (_req, res) => {
       const decodedPath = decodeClaudePath(entry.name);
 
       try {
+        // Check if the original project path still exists
+        await fs.access(decodedPath);
+
         // Get stats for the project directory
         const stats = await fs.stat(claudeProjectPath);
 
-        // Read session files in the project directory
-        const projectFiles = await fs.readdir(claudeProjectPath);
-        const sessionFiles = projectFiles.filter(f =>
-          f.endsWith('.json') || f.endsWith('.jsonl')
-        );
+        // If project doesn't exist in database, add it
+        if (!projectsMap.has(decodedPath)) {
+          const projectId = nanoid();
 
-        // Check if the original project path still exists
-        let hasSession = false;
-        try {
-          await fs.access(decodedPath);
-          hasSession = true;
-        } catch {
-          // Project directory no longer exists - skip it
-          continue;
+          // Insert into database
+          db.prepare(`
+            INSERT INTO projects (id, user_id, name, path, claude_project_path, is_discovered, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+          `).run(
+            projectId,
+            userId,
+            getProjectName(decodedPath),
+            decodedPath,
+            claudeProjectPath,
+            stats.mtime.toISOString(),
+            stats.mtime.toISOString()
+          );
+
+          // Add to map
+          const project: Project = {
+            id: projectId,
+            userId,
+            name: getProjectName(decodedPath),
+            path: decodedPath,
+            claudeProjectPath,
+            isDiscovered: true,
+            createdAt: stats.mtime.toISOString(),
+            updatedAt: stats.mtime.toISOString(),
+            sessionCount: 0,
+            totalTokens: 0,
+            totalCostUsd: 0,
+          };
+          projectsMap.set(decodedPath, project);
+        } else {
+          // Update existing project with discovered status
+          const existingProject = projectsMap.get(decodedPath)!;
+          if (!existingProject.isDiscovered) {
+            db.prepare(`
+              UPDATE projects
+              SET is_discovered = 1, claude_project_path = ?, updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `).run(claudeProjectPath, existingProject.id);
+
+            existingProject.isDiscovered = true;
+            existingProject.claudeProjectPath = claudeProjectPath;
+          }
         }
-
-        discoveredProjects.push({
-          id: Buffer.from(entry.name).toString('base64'),
-          name: getProjectName(decodedPath),
-          path: decodedPath,
-          claudeProjectPath,
-          hasSession,
-          lastModified: stats.mtime.toISOString(),
-          sessionFiles,
-        });
       } catch (err) {
-        // Skip directories we can't read
+        // Skip directories we can't read or that no longer exist
         console.warn(`Could not read project directory ${entry.name}:`, err);
       }
     }
-
-    // Sort by last modified date, newest first
-    discoveredProjects.sort((a, b) =>
-      new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime()
-    );
-
-    res.json({ success: true, data: discoveredProjects });
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      // Projects directory doesn't exist yet - that's okay
-      res.json({ success: true, data: [] });
-      return;
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.error('Error scanning projects directory:', err);
     }
-    throw err;
   }
+
+  // Convert map to array and sort by updated date
+  const projects = Array.from(projectsMap.values()).sort((a, b) =>
+    new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+  );
+
+  res.json({ success: true, data: projects });
 }));
 
-// Get session files for a specific project
-router.get('/:id/sessions', requireAuth, asyncHandler(async (req, res) => {
-  const projectId = req.params.id;
-  if (!projectId) {
-    throw new AppError('Project ID is required', 400, 'MISSING_PROJECT_ID');
+// Get project with sessions and token usage
+router.get('/:projectId', requireAuth, asyncHandler(async (req, res) => {
+  const userId = (req as any).userId;
+  const projectId = req.params.projectId;
+  const db = getDatabase();
+
+  // Get project
+  const project = db.prepare(`
+    SELECT * FROM projects WHERE id = ? AND user_id = ?
+  `).get(projectId, userId) as any;
+
+  if (!project) {
+    throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
   }
-  const projectsDir = getClaudeProjectsDir();
 
-  // Decode the project ID to get the directory name
-  const dirName = Buffer.from(projectId, 'base64').toString('utf-8');
-  const claudeProjectPath = path.join(projectsDir, dirName);
+  // Get sessions with token usage
+  const sessions = db.prepare(`
+    SELECT
+      s.*,
+      tu.input_tokens,
+      tu.output_tokens,
+      tu.cache_read_tokens,
+      tu.cache_creation_tokens,
+      tu.total_tokens,
+      tu.total_cost_usd
+    FROM sessions s
+    LEFT JOIN (
+      SELECT
+        session_id,
+        SUM(input_tokens) as input_tokens,
+        SUM(output_tokens) as output_tokens,
+        SUM(cache_read_tokens) as cache_read_tokens,
+        SUM(cache_creation_tokens) as cache_creation_tokens,
+        SUM(total_tokens) as total_tokens,
+        SUM(total_cost_usd) as total_cost_usd
+      FROM token_usage
+      GROUP BY session_id
+    ) tu ON tu.session_id = s.id
+    WHERE s.project_id = ?
+    ORDER BY s.updated_at DESC
+  `).all(projectId) as any[];
 
-  try {
-    const files = await fs.readdir(claudeProjectPath);
-    const sessionFiles = [];
+  // Calculate totals
+  const totalTokens = sessions.reduce((sum, s) => sum + (s.total_tokens || 0), 0);
+  const totalCostUsd = sessions.reduce((sum, s) => sum + (s.total_cost_usd || 0), 0);
 
-    for (const file of files) {
-      if (!file.endsWith('.json') && !file.endsWith('.jsonl')) continue;
+  // Format response
+  const projectData: Project = {
+    id: project.id,
+    userId: project.user_id,
+    name: project.name,
+    path: project.path,
+    claudeProjectPath: project.claude_project_path,
+    isDiscovered: project.is_discovered === 1,
+    createdAt: project.created_at,
+    updatedAt: project.updated_at,
+    sessionCount: sessions.length,
+    totalTokens,
+    totalCostUsd,
+    sessions: sessions.map(s => ({
+      id: s.id,
+      name: s.name,
+      status: s.status,
+      model: s.model || 'opus',
+      createdAt: s.created_at,
+      updatedAt: s.updated_at,
+      tokenUsage: s.total_tokens ? {
+        inputTokens: s.input_tokens || 0,
+        outputTokens: s.output_tokens || 0,
+        cacheReadTokens: s.cache_read_tokens || 0,
+        cacheCreationTokens: s.cache_creation_tokens || 0,
+        totalTokens: s.total_tokens || 0,
+        totalCostUsd: s.total_cost_usd || 0,
+      } : undefined,
+    })),
+  };
 
-      const filePath = path.join(claudeProjectPath, file);
-      const stats = await fs.stat(filePath);
+  res.json({ success: true, data: projectData });
+}));
 
-      sessionFiles.push({
-        name: file,
-        path: filePath,
-        size: stats.size,
-        modifiedAt: stats.mtime.toISOString(),
-      });
-    }
+// Create or update project
+router.post('/', requireAuth, asyncHandler(async (req, res) => {
+  const userId = (req as any).userId;
+  const { name, path: projectPath } = req.body;
+  const db = getDatabase();
 
-    // Sort by modification time, newest first
-    sessionFiles.sort((a, b) =>
-      new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime()
-    );
+  if (!name || !projectPath) {
+    throw new AppError('Name and path are required', 400, 'MISSING_FIELDS');
+  }
 
-    res.json({ success: true, data: sessionFiles });
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      res.json({ success: true, data: [] });
-      return;
-    }
-    throw err;
+  // Check if project already exists
+  const existing = db.prepare(`
+    SELECT id FROM projects WHERE user_id = ? AND path = ?
+  `).get(userId, projectPath) as any;
+
+  if (existing) {
+    // Update existing project
+    db.prepare(`
+      UPDATE projects SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+    `).run(name, existing.id);
+
+    res.json({ success: true, data: { id: existing.id } });
+  } else {
+    // Create new project
+    const projectId = nanoid();
+
+    db.prepare(`
+      INSERT INTO projects (id, user_id, name, path, is_discovered, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `).run(projectId, userId, name, projectPath);
+
+    res.json({ success: true, data: { id: projectId } });
   }
 }));
 
