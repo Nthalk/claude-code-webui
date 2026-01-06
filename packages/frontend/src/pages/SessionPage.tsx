@@ -161,10 +161,19 @@ export function SessionPage() {
     }
   }, [mobileView, mobileViewOrder]);
 
+  // Track swipe progress for glow effect
+  const [swipeGlow, setSwipeGlow] = useState<{ direction: 'left' | 'right' | null; progress: number }>({
+    direction: null,
+    progress: 0,
+  });
+
   // Set up edge swipe gestures for mobile navigation
   useDocumentSwipeGesture({
     onSwipeLeft: handleSwipeLeft,
     onSwipeRight: handleSwipeRight,
+    onSwipeProgress: (direction, progress) => {
+      setSwipeGlow({ direction, progress });
+    },
     threshold: 30, // Reduced from 50 for more sensitivity
     velocityThreshold: 0.15, // Reduced from 0.25 for easier triggering
     enabled: true,
@@ -904,6 +913,26 @@ export function SessionPage() {
           </div>
         </div>
       )}
+
+      {/* Swipe gesture edge glow */}
+      <div
+        className={cn(
+          'swipe-glow-left',
+          swipeGlow.direction === 'right' && swipeGlow.progress > 0 && 'swipe-glow-active'
+        )}
+        style={{
+          opacity: swipeGlow.direction === 'right' ? swipeGlow.progress : 0,
+        }}
+      />
+      <div
+        className={cn(
+          'swipe-glow-right',
+          swipeGlow.direction === 'left' && swipeGlow.progress > 0 && 'swipe-glow-active'
+        )}
+        style={{
+          opacity: swipeGlow.direction === 'left' ? swipeGlow.progress : 0,
+        }}
+      />
 
       {/* Session Header */}
       <div className="shrink-0 pb-1 md:pb-4 border-b mb-1 md:mb-4 overflow-visible">

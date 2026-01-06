@@ -67,11 +67,12 @@ export function Projects() {
         const projectData = response.data.data;
 
         // Auto-expand if there's only one project with sessions
-        if (!initialExpanded && projectData.length === 1 && projectData[0].sessionCount && projectData[0].sessionCount > 0) {
+        const firstProject = projectData[0];
+        if (!initialExpanded && projectData.length === 1 && firstProject && firstProject.sessionCount && firstProject.sessionCount > 0) {
           setInitialExpanded(true);
           // Use setTimeout to ensure the component has rendered
           setTimeout(() => {
-            toggleProject(projectData[0].id, true);
+            toggleProject(firstProject.id, true);
           }, 0);
         }
 
@@ -316,7 +317,7 @@ export function Projects() {
                               onClick={(e) => {
                                 e.stopPropagation();
                                 // Navigate to the most recent session
-                                if (project.sessions[0]) {
+                                if (project.sessions && project.sessions[0]) {
                                   navigate(`/session/${project.sessions[0].id}`);
                                 }
                               }}

@@ -5,6 +5,7 @@ interface SwipeConfig {
   onSwipeRight?: () => void;
   onSwipeUp?: () => void;
   onSwipeDown?: () => void;
+  onSwipeProgress?: (direction: 'left' | 'right' | null, progress: number) => void;
   threshold?: number; // Minimum distance in pixels
   velocityThreshold?: number; // Minimum velocity in px/ms
   enabled?: boolean;
@@ -40,6 +41,43 @@ export function useSwipeGesture<T extends HTMLElement = HTMLElement>(
 
       const touch = e.touches[0];
       if (!touch) return;
+
+      // Check if the target or any parent element is horizontally scrollable
+      const target = e.target as HTMLElement;
+      let element: HTMLElement | null = target;
+      while (element && element !== document.body) {
+        const style = window.getComputedStyle(element);
+        const overflowX = style.overflowX;
+        const scrollWidth = element.scrollWidth;
+        const clientWidth = element.clientWidth;
+
+        // Check for commonly scrollable elements
+        const isScrollableElement = element.tagName === 'PRE' ||
+                                   element.tagName === 'CODE' ||
+                                   element.tagName === 'TABLE';
+
+        // Element is horizontally scrollable if:
+        // 1. overflow-x is auto or scroll AND
+        // 2. scrollWidth > clientWidth (content actually overflows)
+        // 3. There's a meaningful overflow (more than just rounding errors)
+        const hasHorizontalOverflow = scrollWidth > clientWidth + 1; // +1 for rounding tolerance
+
+        if ((overflowX === 'auto' || overflowX === 'scroll') && hasHorizontalOverflow) {
+          return; // Don't track swipes on horizontally scrollable elements
+        }
+
+        // Check for elements that are actively scrolled
+        if (element.scrollLeft > 0) {
+          return; // Element has been scrolled, so it's scrollable
+        }
+
+        // Special handling for commonly scrollable elements that actually have overflow
+        if (isScrollableElement && hasHorizontalOverflow) {
+          return;
+        }
+
+        element = element.parentElement;
+      }
 
       touchState.current = {
         startX: touch.clientX,
@@ -134,6 +172,7 @@ export function useDocumentSwipeGesture(config: SwipeConfig) {
     onSwipeRight,
     onSwipeUp,
     onSwipeDown,
+    onSwipeProgress,
     threshold = 50,
     velocityThreshold = 0.3,
     enabled = true,
@@ -158,6 +197,42 @@ export function useDocumentSwipeGesture(config: SwipeConfig) {
 
       if (isInteractive) return;
 
+      // Check if the target or any parent element is horizontally scrollable
+      let element: HTMLElement | null = target;
+      while (element && element !== document.body) {
+        const style = window.getComputedStyle(element);
+        const overflowX = style.overflowX;
+        const scrollWidth = element.scrollWidth;
+        const clientWidth = element.clientWidth;
+
+        // Check for commonly scrollable elements
+        const isScrollableElement = element.tagName === 'PRE' ||
+                                   element.tagName === 'CODE' ||
+                                   element.tagName === 'TABLE';
+
+        // Element is horizontally scrollable if:
+        // 1. overflow-x is auto or scroll AND
+        // 2. scrollWidth > clientWidth (content actually overflows)
+        // 3. There's a meaningful overflow (more than just rounding errors)
+        const hasHorizontalOverflow = scrollWidth > clientWidth + 1; // +1 for rounding tolerance
+
+        if ((overflowX === 'auto' || overflowX === 'scroll') && hasHorizontalOverflow) {
+          return; // Don't track swipes on horizontally scrollable elements
+        }
+
+        // Check for elements that are actively scrolled
+        if (element.scrollLeft > 0) {
+          return; // Element has been scrolled, so it's scrollable
+        }
+
+        // Special handling for commonly scrollable elements that actually have overflow
+        if (isScrollableElement && hasHorizontalOverflow) {
+          return;
+        }
+
+        element = element.parentElement;
+      }
+
       touchState.current = {
         startX: touch.clientX,
         startY: touch.clientY,
@@ -175,6 +250,21 @@ export function useDocumentSwipeGesture(config: SwipeConfig) {
 
       touchState.current.currentX = touch.clientX;
       touchState.current.currentY = touch.clientY;
+
+      // Calculate swipe progress
+      if (onSwipeProgress) {
+        const deltaX = touchState.current.currentX - touchState.current.startX;
+        const deltaY = touchState.current.currentY - touchState.current.startY;
+
+        // Only track horizontal swipes
+        if (Math.abs(deltaX) > Math.abs(deltaY)) {
+          const progress = Math.min(Math.abs(deltaX) / threshold, 1);
+          const direction = deltaX > 0 ? 'right' : 'left';
+          onSwipeProgress(direction, progress);
+        } else {
+          onSwipeProgress(null, 0);
+        }
+      }
     };
 
     const handleTouchEnd = () => {
@@ -198,6 +288,11 @@ export function useDocumentSwipeGesture(config: SwipeConfig) {
         }
       }
 
+      // Reset progress
+      if (onSwipeProgress) {
+        onSwipeProgress(null, 0);
+      }
+
       touchState.current = null;
     };
 
@@ -210,5 +305,5 @@ export function useDocumentSwipeGesture(config: SwipeConfig) {
       document.removeEventListener('touchmove', handleTouchMove);
       document.removeEventListener('touchend', handleTouchEnd);
     };
-  }, [enabled, threshold, velocityThreshold, onSwipeLeft, onSwipeRight, onSwipeUp, onSwipeDown]);
+  }, [enabled, threshold, velocityThreshold, onSwipeLeft, onSwipeRight, onSwipeUp, onSwipeDown, onSwipeProgress]);
 }

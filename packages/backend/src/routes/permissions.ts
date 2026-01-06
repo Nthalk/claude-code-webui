@@ -78,6 +78,11 @@ router.post('/request', async (req: Request, res: Response) => {
 
   const { sessionId, requestId, toolName, toolInput, description, suggestedPattern } = parsed.data;
 
+  // Determine default pattern based on tool type
+  const isMcpTool = toolName.startsWith('mcp__');
+  const isWebSearch = toolName === 'WebSearch';
+  const defaultPattern = isMcpTool || isWebSearch ? toolName : `${toolName}(:*)`;
+
   // Store the pending request
   const pendingRequest: PendingPermission = {
     sessionId,
@@ -85,7 +90,7 @@ router.post('/request', async (req: Request, res: Response) => {
     toolName,
     toolInput,
     description: description || `${toolName} tool`,
-    suggestedPattern: suggestedPattern || `${toolName}(:*)`,
+    suggestedPattern: suggestedPattern || defaultPattern,
     status: 'pending',
     createdAt: Date.now(),
   };

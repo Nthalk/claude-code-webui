@@ -448,6 +448,67 @@
   @apply mt-2 mb-2;
 }
 
+/* Swipe gesture edge glow effects */
+.swipe-glow-left,
+.swipe-glow-right {
+  position: fixed;
+  top: 0;
+  width: 80px;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 50;
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+}
+
+.swipe-glow-left {
+  left: 0;
+  background: linear-gradient(
+    to right,
+    rgba(59, 130, 246, 0.5) 0%,
+    rgba(59, 130, 246, 0.3) 30%,
+    rgba(59, 130, 246, 0.1) 60%,
+    transparent 100%
+  );
+}
+
+.swipe-glow-right {
+  right: 0;
+  background: linear-gradient(
+    to left,
+    rgba(59, 130, 246, 0.5) 0%,
+    rgba(59, 130, 246, 0.3) 30%,
+    rgba(59, 130, 246, 0.1) 60%,
+    transparent 100%
+  );
+}
+
+/* Dark mode adjustments for glow */
+.dark .swipe-glow-left {
+  background: linear-gradient(
+    to right,
+    rgba(96, 165, 250, 0.4) 0%,
+    rgba(96, 165, 250, 0.25) 30%,
+    rgba(96, 165, 250, 0.1) 60%,
+    transparent 100%
+  );
+}
+
+.dark .swipe-glow-right {
+  background: linear-gradient(
+    to left,
+    rgba(96, 165, 250, 0.4) 0%,
+    rgba(96, 165, 250, 0.25) 30%,
+    rgba(96, 165, 250, 0.1) 60%,
+    transparent 100%
+  );
+}
+
+/* Active state when swiping */
+.swipe-glow-active {
+  opacity: 1;
+}
+
 /* Improve list markers visibility */
 .prose ol > li::marker {
   @apply text-foreground font-medium;

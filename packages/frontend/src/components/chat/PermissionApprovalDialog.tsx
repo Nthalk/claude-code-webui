@@ -25,6 +25,9 @@ const PREFIX_TOOLS = ['Bash'];
 // Tools that require exact matches (no wildcards)
 const EXACT_MATCH_TOOLS = ['WebSearch', 'WebFetch'];
 
+// Check if a tool is an MCP tool (format: mcp__namespace__toolname)
+const isMcpTool = (toolName: string) => toolName.startsWith('mcp__');
+
 // Validate pattern syntax and return error if invalid
 interface PatternValidationError {
   message: string;
@@ -32,6 +35,45 @@ interface PatternValidationError {
 }
 
 function validatePatternSyntax(pattern: string): PatternValidationError | null {
+  // For MCP tools, parentheses are not allowed
+  if (isMcpTool(pattern)) {
+    const hasParentheses = pattern.includes('(') || pattern.includes(')');
+    if (hasParentheses) {
+      const cleanPattern = pattern.split('(')[0] || pattern;
+      return {
+        message: `MCP tools do not support wildcards. Use the exact tool name only.`,
+        suggestion: cleanPattern,
+      };
+    }
+    return null;
+  }
+
+  // For WebSearch, validate domain: syntax
+  if (pattern.startsWith('WebSearch')) {
+    const match = pattern.match(/^WebSearch\((.*)\)$/);
+    if (match) {
+      const content = match[1];
+      // Check if it's using domain: syntax
+      if (content && !content.startsWith('domain:')) {
+        return {
+          message: `WebSearch only supports domain restrictions. Use "domain:example.com" syntax.`,
+          suggestion: content.includes('.') ? `WebSearch(domain:${content})` : 'WebSearch',
+        };
+      }
+      // Validate domain format
+      if (content && content.startsWith('domain:')) {
+        const domain = content.substring(7);
+        if (!domain || domain.includes('*') || domain.includes('?')) {
+          return {
+            message: `Invalid domain format. Use specific domains only, no wildcards.`,
+            suggestion: 'WebSearch',
+          };
+        }
+      }
+    }
+    return null;
+  }
+
   // Parse pattern: Tool(content)
   const match = pattern.match(/^(\w+)\((.*)\)$/);
   if (!match) {
@@ -143,9 +185,22 @@ function globToRegex(glob: string): RegExp {
 
 // Test if a pattern matches a given test string
 function testPattern(pattern: string, testString: string): boolean {
+  // MCP tools - exact match only (no parentheses)
+  if (isMcpTool(pattern)) {
+    return pattern === pattern; // Always matches itself
+  }
+
+  // WebSearch - handle domain: syntax
+  if (pattern === 'WebSearch' || pattern.startsWith('WebSearch(')) {
+    return true; // WebSearch patterns always match for display purposes
+  }
+
   // Extract the pattern content (between parentheses)
   const match = pattern.match(/^(\w+)\((.*)\)$/);
-  if (!match) return false;
+  if (!match) {
+    // Simple pattern without parentheses - matches itself
+    return pattern === pattern;
+  }
 
   const patternTool = match[1];
   const patternContent = match[2];
@@ -202,6 +257,22 @@ export function PermissionApprovalDialog({ permission, onRespond }: PermissionAp
 
   // Get help text based on tool type
   const helpText = useMemo(() => {
+    if (isMcpTool(permission.toolName)) {
+      return (
+        <>
+          MCP tools use exact tool name matching only. No wildcards or parentheses.
+          (e.g., <code>{permission.toolName}</code>)
+        </>
+      );
+    }
+    if (permission.toolName === 'WebSearch') {
+      return (
+        <>
+          Use <code>WebSearch</code> to allow all searches, or <code>WebSearch(domain:example.com)</code>
+          to restrict to specific domains. Place in allow or deny sections as needed.
+        </>
+      );
+    }
     if (FILE_TOOLS.includes(permission.toolName)) {
       return (
         <>
@@ -214,7 +285,7 @@ export function PermissionApprovalDialog({ permission, onRespond }: PermissionAp
       return (
         <>
           Use exact search terms only. Wildcards are not supported.
-          (e.g., <code>WebSearch(typescript tutorial)</code>)
+          (e.g., <code>WebFetch(https://example.com)</code>)
         </>
       );
     }
@@ -305,10 +376,14 @@ export function PermissionApprovalDialog({ permission, onRespond }: PermissionAp
                       validationError ? 'border-amber-500' : 'border-border'
                     }`}
                     placeholder={
-                      FILE_TOOLS.includes(permission.toolName)
+                      isMcpTool(permission.toolName)
+                        ? `e.g., ${permission.toolName}`
+                        : permission.toolName === 'WebSearch'
+                        ? 'e.g., WebSearch or WebSearch(domain:wikipedia.org)'
+                        : FILE_TOOLS.includes(permission.toolName)
                         ? 'e.g., Read(/src/**)'
                         : EXACT_MATCH_TOOLS.includes(permission.toolName)
-                        ? `e.g., ${permission.toolName}(specific search terms)`
+                        ? `e.g., ${permission.toolName}(https://example.com)`
                         : 'e.g., Bash(git checkout:*)'
                     }
                   />
@@ -358,6 +433,7 @@ export function PermissionApprovalDialog({ permission, onRespond }: PermissionAp
                     )}
                   </div>
                 </div>
+
               </div>
             )}
           </div>

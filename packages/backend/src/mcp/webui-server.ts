@@ -513,7 +513,19 @@ function formatDescription(tool: string, input: unknown): string {
 function generateSuggestedPattern(tool: string, input: unknown): string {
     const FILE_TOOLS = ['Read', 'Write', 'Edit', 'Glob'];
 
+    // Check if this is an MCP tool (format: mcp__namespace__toolname)
+    const isMcpTool = tool.startsWith('mcp__');
+
+    // WebSearch doesn't support wildcards at all
+    if (tool === 'WebSearch') {
+        return tool;
+    }
+
     if (!input || typeof input !== 'object') {
+        if (isMcpTool) {
+            // MCP tools use bare tool name without parentheses
+            return tool;
+        }
         if (FILE_TOOLS.includes(tool)) {
             return `${tool}(**)`;
         }
@@ -521,6 +533,11 @@ function generateSuggestedPattern(tool: string, input: unknown): string {
     }
 
     const inputObj = input as Record<string, unknown>;
+
+    // For MCP tools, always return bare tool name
+    if (isMcpTool) {
+        return tool;
+    }
 
     switch (tool) {
         case 'Bash': {
@@ -551,6 +568,10 @@ function generateSuggestedPattern(tool: string, input: unknown): string {
             }
             return `Glob(**)`;
         }
+        case 'WebSearch':
+            // WebSearch uses domain: syntax for domain restrictions
+            // Default to allowing all searches
+            return tool;
         default:
             return `${tool}(:*)`;
     }

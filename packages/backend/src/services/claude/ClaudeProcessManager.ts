@@ -428,6 +428,8 @@ export class ClaudeProcessManager {
                 WEBUI_BACKEND_URL: `http://localhost:${config.port}`,
                 // Pass project path for loading project-specific settings
                 WEBUI_PROJECT_PATH: session.working_directory,
+                // Set MCP timeout to 24 hours (in milliseconds)
+                MCP_TIMEOUT: '86400000',
             },
             stdio: ['pipe', 'pipe', 'pipe'],
         });
