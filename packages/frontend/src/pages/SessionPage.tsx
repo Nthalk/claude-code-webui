@@ -288,11 +288,14 @@ export function SessionPage() {
         data: img,
         timestamp: img.timestamp,
       })),
-      ...currentToolExecutions.map(exec => ({
-        type: 'tool' as const,
-        data: exec,
-        timestamp: exec.timestamp,
-      })),
+      ...currentToolExecutions
+        // Hide completed TodoWrite tool executions
+        .filter(exec => !(exec.toolName === 'TodoWrite' && exec.status === 'completed'))
+        .map(exec => ({
+          type: 'tool' as const,
+          data: exec,
+          timestamp: exec.timestamp,
+        })),
     ];
     return items.sort((a, b) => a.timestamp - b.timestamp);
   }), [sessionMessages, currentGeneratedImages, currentToolExecutions]); // Chronological order

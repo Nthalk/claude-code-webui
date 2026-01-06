@@ -213,6 +213,22 @@ function runMigrations(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_pending_permissions_session_id ON pending_permissions(session_id);
     CREATE INDEX IF NOT EXISTS idx_pending_permissions_request_id ON pending_permissions(request_id);
   `);
+
+  // Migration: Create todos table for storing session todos
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS todos (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      content TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'in_progress', 'completed')),
+      active_form TEXT,
+      sort_order INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_todos_session_id ON todos(session_id);
+    CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status);
+  `);
 }
 
 export { db };

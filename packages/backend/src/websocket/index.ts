@@ -10,6 +10,7 @@ import type {
 import { config } from '../config';
 import { ClaudeProcessManager } from '../services/claude/ClaudeProcessManager';
 import { GeminiService } from '../services/gemini';
+import { getTodosBySessionId } from '../db/todos';
 
 // Global reference to the process manager for use by routes
 let _processManager: ClaudeProcessManager | null = null;
@@ -83,6 +84,20 @@ export function setupWebSocket(httpServer: HttpServer): Server {
       socket.data.subscribedSessions.add(sessionId);
       socket.join(`session:${sessionId}`);
       console.log(`Socket ${socket.id} subscribed to session ${sessionId}`);
+
+      // Load and emit todos for the session
+      try {
+        const todos = getTodosBySessionId(sessionId);
+        if (todos.length > 0) {
+          console.log(`[TODOS] Loading ${todos.length} todos from database for session ${sessionId}`);
+          socket.emit('session:todos', {
+            sessionId,
+            todos,
+          });
+        }
+      } catch (err) {
+        console.error(`[TODOS] Failed to load todos for session ${sessionId}:`, err);
+      }
 
       // Emit current usage if session is running
       if (processManager.isSessionRunning(sessionId)) {
@@ -296,6 +311,20 @@ export function setupWebSocket(httpServer: HttpServer): Server {
           bufferedMessages: [],
           isRunning: false,
         });
+      }
+
+      // Load and emit todos for the session on reconnect
+      try {
+        const todos = getTodosBySessionId(sessionId);
+        if (todos.length > 0) {
+          console.log(`[TODOS] Loading ${todos.length} todos from database for reconnected session ${sessionId}`);
+          socket.emit('session:todos', {
+            sessionId,
+            todos,
+          });
+        }
+      } catch (err) {
+        console.error(`[TODOS] Failed to load todos for reconnected session ${sessionId}:`, err);
       }
 
       // Check for pending permissions and re-emit them to the reconnecting client

@@ -9,6 +9,7 @@ import type {
     SocketData,
 } from '@claude-code-webui/shared';
 import {getDatabase} from '../../db';
+import {replaceTodos, deleteTodosBySessionId} from '../../db/todos.js';
 import {nanoid} from 'nanoid';
 import fs from 'fs/promises';
 import fsSync from 'fs';
@@ -952,14 +953,24 @@ export class ClaudeProcessManager {
                                 todos?: Array<{ content: string; status: string; activeForm?: string }>
                             };
                             if (todoInput.todos && Array.isArray(todoInput.todos)) {
-                                console.log(`[TODOS] Emitting ${todoInput.todos.length} todos`);
+                                console.log(`[TODOS] Saving ${todoInput.todos.length} todos to database`);
+
+                                const todoItems = todoInput.todos.map((t) => ({
+                                    content: t.content,
+                                    status: t.status as 'pending' | 'in_progress' | 'completed',
+                                    activeForm: t.activeForm,
+                                }));
+
+                                // Save to database
+                                replaceTodos(sessionId, todoItems);
+
+                                // Buffer the todos for reconnection
+                                this.bufferMessage(sessionId, 'todos', { todos: todoItems });
+
+                                // Emit to connected clients
                                 this.io.to(`session:${sessionId}`).emit('session:todos', {
                                     sessionId,
-                                    todos: todoInput.todos.map((t) => ({
-                                        content: t.content,
-                                        status: t.status as 'pending' | 'in_progress' | 'completed',
-                                        activeForm: t.activeForm,
-                                    })),
+                                    todos: todoItems,
                                 });
                             }
                         } catch (err) {
@@ -1798,6 +1809,10 @@ This is the project you should be working on. All file operations should be rela
         // Clear any pending plan approvals since the process is gone
         const { clearPendingPlanApprovalsForSession } = await import('../../routes/plan');
         clearPendingPlanApprovalsForSession(sessionId);
+
+        // Clear todos from database since we're starting fresh
+        deleteTodosBySessionId(sessionId);
+        console.log(`[SESSION] Cleared todos for session ${sessionId}`);
 
         // Emit restarted event so frontend knows the Claude process restarted
         this.io.to(`session:${sessionId}`).emit('session:restarted', {sessionId});
