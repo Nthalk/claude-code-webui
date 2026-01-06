@@ -7,7 +7,7 @@ import { useSessionStore } from '@/stores/sessionStore';
 import { CodeEditor } from './CodeEditor';
 import { FileIcon } from '@/components/file-tree/file-icons';
 import type { ApiResponse } from '@claude-code-webui/shared';
-import { cn } from '@/lib/utils';
+import { cn, formatShortcut } from '@/lib/utils';
 
 interface EditorPanelProps {
   sessionId: string;
@@ -133,7 +133,7 @@ export function EditorPanel({ sessionId }: EditorPanelProps) {
             ) : (
               <Save className="h-3 w-3 mr-1" />
             )}
-            <span className="text-xs">Ctrl+S</span>
+            <span className="text-xs">{formatShortcut('S')}</span>
           </Button>
         )}
       </div>

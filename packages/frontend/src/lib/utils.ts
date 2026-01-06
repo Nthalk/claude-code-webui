@@ -34,3 +34,30 @@ export function stripWorkingDirectory(filePath: string, workingDirectory?: strin
   // Return original path if it's not under the working directory
   return filePath;
 }
+
+/**
+ * Detects if the current platform is macOS
+ * @returns true if running on macOS, false otherwise
+ */
+export function isMac(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return navigator.platform.toLowerCase().includes('mac') ||
+         navigator.userAgent.toLowerCase().includes('mac');
+}
+
+/**
+ * Gets the platform-appropriate modifier key name
+ * @returns 'Cmd' for macOS, 'Ctrl' for other platforms
+ */
+export function getModifierKey(): string {
+  return isMac() ? 'Cmd' : 'Ctrl';
+}
+
+/**
+ * Formats a keyboard shortcut with the correct modifier key for the platform
+ * @param key The key to combine with the modifier (e.g., 'S', 'C', 'V')
+ * @returns The formatted shortcut string (e.g., 'Cmd+S' on Mac, 'Ctrl+S' on Windows/Linux)
+ */
+export function formatShortcut(key: string): string {
+  return `${getModifierKey()}+${key}`;
+}
