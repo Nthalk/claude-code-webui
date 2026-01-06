@@ -33,6 +33,7 @@ import {GrepToolRenderer} from '../GrepToolRenderer';
 import {WebSearchToolRenderer} from '../WebSearchToolRenderer';
 import {ReadToolRenderer} from '../ReadToolRenderer';
 import {PlanRenderer} from '../PlanRenderer';
+import {ExploreRenderer} from '../ExploreRenderer';
 import {stripWorkingDirectory} from '@/lib/utils';
 
 interface ToolExecutionCardProps {
@@ -332,12 +333,23 @@ export function ToolExecutionCard({execution, workingDirectory}: ToolExecutionCa
                             workingDirectory={workingDirectory}
                         />
                     ) : execution.toolName === 'Task' && parsedInput && typeof parsedInput === 'object' ? (
-                        <PlanRenderer
-                            input={parsedInput as TaskToolInput}
-                            result={execution.result}
-                            error={execution.error}
-                            status={execution.status}
-                        />
+                        // Check subagent_type to determine which renderer to use
+                        (parsedInput as TaskToolInput).subagent_type === 'Explore' ||
+                        (parsedInput as TaskToolInput).subagent_type === 'explore' ? (
+                            <ExploreRenderer
+                                input={parsedInput as TaskToolInput}
+                                result={execution.result}
+                                error={execution.error}
+                                status={execution.status}
+                            />
+                        ) : (
+                            <PlanRenderer
+                                input={parsedInput as TaskToolInput}
+                                result={execution.result}
+                                error={execution.error}
+                                status={execution.status}
+                            />
+                        )
                     ) : (
                         <>
                             {/* Default renderer for other tools */}
