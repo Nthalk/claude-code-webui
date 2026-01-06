@@ -1,10 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Square, FolderOpen, Image, X, Paperclip, Brain, ListTodo, Circle, CheckCircle, Loader2, GitBranch, MessageSquare, Code2, Star, RotateCcw, MoreVertical, Settings, Menu, ChevronDown } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
+import { Square, FolderOpen, Image, X, Paperclip, Brain, ListTodo, Circle, CheckCircle, Loader2, GitBranch, MessageSquare, Code2, Star, RotateCcw, MoreVertical, Settings, Menu, ChevronDown, Loader, PlayCircle, Bug, Terminal } from 'lucide-react';
 import 'katex/dist/katex.min.css';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -26,7 +23,10 @@ import { StreamingContent } from '@/components/chat/StreamingContent';
 import { SessionControls } from '@/components/session/SessionControls';
 import { FileTree } from '@/components/file-tree';
 import { GitPanel } from '@/components/git-panel';
+import { DebugPanel } from '@/components/debug/DebugPanel';
 import { EditorPanel } from '@/components/code-editor';
+import { TodoBar } from '@/components/todo/TodoBar';
+import { MessageContent } from '@/components/chat/MessageContent';
 import type { MobileView } from '@/components/mobile';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
@@ -39,7 +39,8 @@ import { InteractiveOptions, detectOptions, isChoicePrompt } from '@/components/
 import { ToolExecutionCard } from '@/components/chat/ToolExecutionCard';
 import { PermissionApprovalDialog } from '@/components/chat/PermissionApprovalDialog';
 import { UserQuestionDialog } from '@/components/chat/UserQuestionDialog';
-import { useDocumentSwipeGesture } from '@/hooks';
+import { PlanApprovalInput } from '@/components/chat/PlanApprovalInput';
+import { useDocumentSwipeGesture, useChanged, timeBlock } from '@/hooks';
 import { useTheme, type FontFamily, type FontSize } from '@/providers/ThemeProvider';
 import type { PermissionAction, UserQuestionAnswers } from '@claude-code-webui/shared';
 
@@ -97,7 +98,6 @@ function formatMessageTimestamp(timestamp: string | number): string {
 
 export function SessionPage() {
   const { id } = useParams<{ id: string }>();
-  const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -109,7 +109,47 @@ export function SessionPage() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [showScrollButton, setShowScrollButton] = useState(false);
-  const { messages, streamingContent, activity, todos, generatedImages, toolExecutions, pendingPermissions, pendingUserQuestions, setMessages, setToolExecutions, clearToolExecutions, clearGeneratedImages, clearStreamingContent, selectedFile, setSelectedFile, openFile: openFileInStore, openFiles } = useSessionStore();
+
+  // Track what props/state changed between renders
+  useChanged('SessionPage', {
+    id,
+    attachmentsLength: attachments.length,
+    isDragging,
+    isSending,
+    sessionMode,
+    isAtBottom,
+    showScrollButton,
+  }, ['id', 'attachmentsLength', 'isDragging', 'isSending', 'sessionMode', 'isAtBottom', 'showScrollButton']);
+
+  // Use selectors to only subscribe to specific parts of the store
+  const messages = useSessionStore((state) => state.messages);
+  const streamingContent = useSessionStore((state) => state.streamingContent);
+  const activity = useSessionStore((state) => state.activity);
+  const compacting = useSessionStore((state) => state.compacting);
+  const todos = useSessionStore((state) => state.todos);
+  const generatedImages = useSessionStore((state) => state.generatedImages);
+  const toolExecutions = useSessionStore((state) => state.toolExecutions);
+  const pendingPermissions = useSessionStore((state) => state.pendingPermissions);
+  const pendingUserQuestions = useSessionStore((state) => state.pendingUserQuestions);
+  const pendingPlanApprovals = useSessionStore((state) => state.pendingPlanApprovals);
+  const selectedFile = useSessionStore((state) => state.selectedFile);
+  const openFiles = useSessionStore((state) => state.openFiles);
+  const usage = useSessionStore((state) => state.usage);
+  const mobileView = useSessionStore((state) => state.mobileView);
+
+  // Actions are stable references in Zustand - get them individually to avoid creating new objects
+  const setMessages = useSessionStore((state) => state.setMessages);
+  const setToolExecutions = useSessionStore((state) => state.setToolExecutions);
+  const clearToolExecutions = useSessionStore((state) => state.clearToolExecutions);
+  const clearGeneratedImages = useSessionStore((state) => state.clearGeneratedImages);
+  const clearStreamingContent = useSessionStore((state) => state.clearStreamingContent);
+  const setSelectedFile = useSessionStore((state) => state.setSelectedFile);
+  const openFileInStore = useSessionStore((state) => state.openFile);
+  const addMessage = useSessionStore((state) => state.addMessage);
+  const setMobileView = useSessionStore((state) => state.setMobileView);
+  const setMobileMenuOpen = useSessionStore((state) => state.setMobileMenuOpen);
+  const setSessions = useSessionStore((state) => state.setSessions);
+
   const [selectedCliTool, setSelectedCliTool] = useState<string | null>(null);
   const [isExecutingTool, setIsExecutingTool] = useState(false);
   const cliToolAbortRef = useRef<AbortController | null>(null);
@@ -117,14 +157,11 @@ export function SessionPage() {
   const [commandMenuIndex, setCommandMenuIndex] = useState(0);
   const [visibleTimestamp, setVisibleTimestamp] = useState<string | null>(null);
   const [showProjectSettings, setShowProjectSettings] = useState(false);
-
-  const { usage, addMessage, mobileView, setMobileView, setMobileMenuOpen } = useSessionStore();
   const { settings: themeSettings, updateDesktopFont, updateDesktopSize, updateMobileFont, updateMobileSize } = useTheme();
 
   // Mobile swipe gesture navigation
   const mobileViewOrder = useMemo((): MobileView[] => {
-    const views: MobileView[] = ['files', 'chat', 'git'];
-    return views;
+    return ['files', 'chat', 'git', 'debug'];
   }, []);
 
   const handleSwipeLeft = useCallback(() => {
@@ -179,17 +216,24 @@ export function SessionPage() {
       }>>('/api/usage/limits');
       if (response.data.success && response.data.data) {
         const data = response.data.data;
+        const sessionUsed = Math.round(data.fiveHour?.utilization ?? 0);
+        const weeklyAllUsed = Math.round(data.sevenDay?.utilization ?? 0);
+        const weeklySonnetUsed = Math.round(data.sevenDaySonnet?.utilization ?? 0);
+
         return {
           session: {
-            percentUsed: Math.round(data.fiveHour?.utilization ?? 0),
+            percentUsed: sessionUsed,
+            percentRemaining: 100 - sessionUsed,
             resetsAt: data.fiveHour?.resetsAt ? new Date(data.fiveHour.resetsAt) : undefined,
           },
           weeklyAll: {
-            percentUsed: Math.round(data.sevenDay?.utilization ?? 0),
+            percentUsed: weeklyAllUsed,
+            percentRemaining: 100 - weeklyAllUsed,
             resetsAt: data.sevenDay?.resetsAt ? new Date(data.sevenDay.resetsAt) : undefined,
           },
           weeklySonnet: {
-            percentUsed: Math.round(data.sevenDaySonnet?.utilization ?? 0),
+            percentUsed: weeklySonnetUsed,
+            percentRemaining: 100 - weeklySonnetUsed,
             resetsAt: data.sevenDaySonnet?.resetsAt ? new Date(data.sevenDaySonnet.resetsAt) : undefined,
           },
         };
@@ -207,17 +251,24 @@ export function SessionPage() {
   const currentUsage = usage[id || ''];
   const currentTodos = todos[id || ''] || [];
   const currentGeneratedImages = generatedImages[id || ''] || [];
+  const isCompacting = compacting[id || ''] || false;
   const currentToolExecutions = toolExecutions[id || ''] || [];
   const currentPendingPermission = pendingPermissions[id || ''] || null;
   const currentPendingUserQuestion = pendingUserQuestions[id || ''] || null;
+  const currentPendingPlanApproval = pendingPlanApprovals[id || ''] || null;
+  const hasTodos = currentTodos.length > 0 && currentTodos.some(t => t.status !== 'completed');
 
   // Right panel state from store (controlled by sidebar toggle buttons)
-  const { rightPanelTab, setRightPanelTab } = useSessionStore();
+  const rightPanelTab = useSessionStore((state) => state.rightPanelTab);
+  const setRightPanelTab = useSessionStore((state) => state.setRightPanelTab);
 
   const [mainView, setMainView] = useState<'chat' | 'editor'>('chat');
   const currentSelectedFile = selectedFile[id || ''];
   const currentOpenFiles = openFiles[id || ''] || [];
   const hasOpenFiles = currentOpenFiles.length > 0;
+
+  // State for how many messages to show
+  const [messagesToShow, setMessagesToShow] = useState(50);
 
   // Combine messages, generated images, and tool executions into a single timeline
   type TimelineItem =
@@ -225,23 +276,47 @@ export function SessionPage() {
     | { type: 'image'; data: typeof currentGeneratedImages[0]; timestamp: number }
     | { type: 'tool'; data: typeof currentToolExecutions[0]; timestamp: number };
 
-  const timeline: TimelineItem[] = [
-    ...sessionMessages.map(msg => ({
-      type: 'message' as const,
-      data: msg,
-      timestamp: new Date(msg.createdAt).getTime(),
-    })),
-    ...currentGeneratedImages.map(img => ({
-      type: 'image' as const,
-      data: img,
-      timestamp: img.timestamp,
-    })),
-    ...currentToolExecutions.map(exec => ({
-      type: 'tool' as const,
-      data: exec,
-      timestamp: exec.timestamp,
-    })),
-  ].sort((a, b) => a.timestamp - b.timestamp); // Chronological order
+  const timeline: TimelineItem[] = useMemo(() => timeBlock('timeline-creation', () => {
+    const items = [
+      ...sessionMessages.map(msg => ({
+        type: 'message' as const,
+        data: msg,
+        timestamp: new Date(msg.createdAt).getTime(),
+      })),
+      ...currentGeneratedImages.map(img => ({
+        type: 'image' as const,
+        data: img,
+        timestamp: img.timestamp,
+      })),
+      ...currentToolExecutions.map(exec => ({
+        type: 'tool' as const,
+        data: exec,
+        timestamp: exec.timestamp,
+      })),
+    ];
+    return items.sort((a, b) => a.timestamp - b.timestamp);
+  }), [sessionMessages, currentGeneratedImages, currentToolExecutions]); // Chronological order
+
+  // Get visible timeline items - show the last N items
+  const visibleTimeline = useMemo(() => timeBlock('visible-timeline', () => {
+    if (timeline.length <= messagesToShow) return timeline;
+    return timeline.slice(-messagesToShow);
+  }), [timeline, messagesToShow]);
+
+  const hasMoreMessages = timeline.length > messagesToShow;
+
+  // Fetch all sessions for sidebar
+  useQuery({
+    queryKey: ['sessions'],
+    queryFn: async () => {
+      const response = await api.get<ApiResponse<Session[]>>('/api/sessions');
+      if (response.data.success && response.data.data) {
+        setSessions(response.data.data);
+        return response.data.data;
+      }
+      return [];
+    },
+  });
 
   // Fetch session details
   const { data: session, isLoading: sessionLoading } = useQuery({
@@ -320,10 +395,9 @@ export function SessionPage() {
 
     // Start heartbeat to detect if backend restarts
     socketService.startHeartbeat(id, (sessionId) => {
-      console.log(`[SESSION] Heartbeat detected session ${sessionId} not found, starting session`);
-      // Backend restarted - start the session by sending an empty message
-      // sendMessage will auto-start the session if it doesn't exist
-      socketService.sendMessage(sessionId, '');
+      console.log(`[SESSION] Heartbeat detected session ${sessionId} not found, resuming session`);
+      // Backend restarted - resume the session without sending an empty message
+      socketService.resumeSession(sessionId);
       // Also reconnect to get proper subscription
       setTimeout(() => socketService.reconnectToSession(sessionId), 500);
     });
@@ -334,14 +408,46 @@ export function SessionPage() {
     };
   }, [id]);
 
-  // Auto-resize textarea
+  // Auto-resume session if it has pending messages or was active
+  const [hasAutoResumed, setHasAutoResumed] = useState(false);
   useEffect(() => {
-    const textarea = textareaRef.current;
-    if (textarea) {
-      textarea.style.height = 'auto';
-      textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px';
-    }
-  }, [input]);
+    if (!id || !session || hasAutoResumed) return;
+
+    const autoResume = async () => {
+      // Check if session needs to be resumed
+      if (session.sessionState === 'has-pending' || session.sessionState === 'active') {
+        console.log(`[SESSION] Auto-resuming session ${id} (state: ${session.sessionState})`);
+
+        // Fetch pending messages if any
+        if (session.sessionState === 'has-pending') {
+          try {
+            const response = await api.get<ApiResponse<Array<{ id: string; content: string }>>>(`/api/sessions/${id}/pending-messages`);
+            if (response.data.success && response.data.data && response.data.data.length > 0) {
+              console.log(`[SESSION] Found ${response.data.data.length} pending messages`);
+
+              // Send each pending message
+              for (const pendingMsg of response.data.data) {
+                socketService.sendMessage(id, pendingMsg.content);
+              }
+
+              // Clear pending messages after sending
+              await api.delete(`/api/sessions/${id}/pending-messages`);
+            }
+          } catch (error) {
+            console.error('[SESSION] Error processing pending messages:', error);
+          }
+        } else if (session.sessionState === 'active') {
+          // Session was active - just reconnect, it should resume automatically
+          console.log(`[SESSION] Reconnecting to active session ${id}`);
+          socketService.reconnectToSession(id);
+        }
+
+        setHasAutoResumed(true);
+      }
+    };
+
+    autoResume();
+  }, [id, session, hasAutoResumed]);
 
   // Track scroll position to determine if user is at bottom
   const handleScroll = useCallback(() => {
@@ -360,8 +466,12 @@ export function SessionPage() {
   useEffect(() => {
     if (isAtBottom) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+      // Reset to showing last 50 messages when new messages arrive
+      if (timeline.length > messagesToShow && messagesToShow < timeline.length) {
+        setMessagesToShow(50);
+      }
     }
-  }, [timeline.length, currentStreamingContent, isAtBottom]);
+  }, [timeline.length, currentStreamingContent, isAtBottom, messagesToShow]);
 
   // Scroll to bottom function for the button
   const scrollToBottom = useCallback(() => {
@@ -404,6 +514,8 @@ export function SessionPage() {
       setRightPanelTab('todos');
     } else if (mobileView === 'files') {
       setRightPanelTab('files');
+    } else if (mobileView === 'debug') {
+      setRightPanelTab('debug');
     } else if (mobileView === 'editor') {
       setMainView('editor');
     } else if (mobileView === 'chat') {
@@ -473,6 +585,7 @@ export function SessionPage() {
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
+    const input = textareaRef.current?.value || '';
     if ((!input.trim() && attachments.length === 0) || !id || isSending || isExecutingTool) return;
 
     // Check for slash commands
@@ -483,7 +596,7 @@ export function SessionPage() {
           input,
           projectPath: session?.workingDirectory,
           sessionId: id,
-          currentModel: 'claude-sonnet-4-20250514',
+          currentModel: 'claude-opus-4-20250514',
           usage: currentUsage ? {
             inputTokens: currentUsage.inputTokens,
             outputTokens: currentUsage.outputTokens,
@@ -500,8 +613,23 @@ export function SessionPage() {
             setMessages(id, []);
             clearToolExecutions(id);
             clearGeneratedImages(id);
+          } else if (result.action === 'clear_with_restart') {
+            // Delete messages and tool executions from database
+            await api.delete(`/api/sessions/${id}/messages`);
+            // Clear UI state
+            setMessages(id, []);
+            clearToolExecutions(id);
+            clearGeneratedImages(id);
+            // Restart the Claude session
+            await api.post(`/api/sessions/${id}/restart`);
           } else if (result.action === 'send_message' && result.response) {
             // Send the processed command template as a message
+            socketService.sendMessage(id, result.response);
+          } else if (result.action === 'compact_context') {
+            // Trigger context compaction in Claude
+            socketService.sendMessage(id, '/compact');
+          } else if (result.action === 'send_claude_command' && result.response) {
+            // Send command directly to Claude
             socketService.sendMessage(id, result.response);
           } else if (result.response) {
             // Show command response as a system message
@@ -523,7 +651,10 @@ export function SessionPage() {
             });
           }
         }
-        setInput('');
+        if (textareaRef.current) {
+          textareaRef.current.value = '';
+          textareaRef.current.style.height = 'auto';
+        }
       } catch (error) {
         console.error('Command execution failed:', error);
       }
@@ -552,7 +683,10 @@ export function SessionPage() {
           setMessages(id, messagesResponse.data.data);
         }
 
-        setInput('');
+        if (textareaRef.current) {
+          textareaRef.current.value = '';
+          textareaRef.current.style.height = 'auto';
+        }
         setSelectedCliTool(null); // Reset tool selection after use
       } catch (error) {
         // Don't show error if it was cancelled
@@ -596,7 +730,10 @@ export function SessionPage() {
       } else {
         socketService.sendMessage(id, input);
       }
-      setInput('');
+      if (textareaRef.current) {
+        textareaRef.current.value = '';
+        textareaRef.current.style.height = 'auto';
+      }
       clearStreamingContent(id);
     } finally {
       setIsSending(false);
@@ -626,14 +763,15 @@ export function SessionPage() {
     }
   }, [id]);
 
-  const handlePermissionResponse = useCallback(async (action: PermissionAction, pattern?: string) => {
+  const handlePermissionResponse = useCallback(async (action: PermissionAction, pattern?: string, reason?: string) => {
     if (!id || !currentPendingPermission) return;
     try {
       await socketService.respondToPermission(
         id,
         currentPendingPermission.requestId,
         action,
-        pattern
+        pattern,
+        reason
       );
     } catch (error) {
       console.error('Failed to respond to permission request:', error);
@@ -652,6 +790,36 @@ export function SessionPage() {
       console.error('Failed to respond to user question:', error);
     }
   }, [id, currentPendingUserQuestion]);
+
+  const handlePlanApprovalResponse = useCallback(async (approved: boolean, reason?: string) => {
+    if (!id || !currentPendingPlanApproval) return;
+    try {
+      const token = useAuthStore.getState().token;
+      if (!token) {
+        throw new Error('No auth token');
+      }
+
+      // Send response to backend API
+      const response = await fetch('/api/plan/respond', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          requestId: currentPendingPlanApproval.requestId,
+          approved,
+          reason
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to respond to plan approval');
+      }
+    } catch (error) {
+      console.error('Failed to respond to plan approval request:', error);
+    }
+  }, [id, currentPendingPlanApproval]);
 
   const handleCancelCliTool = () => {
     if (cliToolAbortRef.current) {
@@ -675,15 +843,22 @@ export function SessionPage() {
     );
   }
 
-  return (
-    <div
-      ref={dropZoneRef}
-      onDragEnter={handleDragEnter}
-      onDragLeave={handleDragLeave}
-      onDragOver={handleDragOver}
-      onDrop={handleDrop}
-      className="flex flex-col h-full min-h-0 relative overflow-hidden"
-    >
+  return timeBlock('SessionPage-render', () => (
+    <>
+      {/* TodoBar - only shown when there are incomplete todos */}
+      {hasTodos && <TodoBar todos={currentTodos} />}
+
+      <div
+        ref={dropZoneRef}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+        className={cn(
+          "flex flex-col h-full min-h-0 relative overflow-hidden",
+          hasTodos && "pt-12" // Add padding when TodoBar is showing
+        )}
+      >
       {/* Drop overlay */}
       {isDragging && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-primary/10 backdrop-blur-sm border-2 border-dashed border-primary rounded-xl">
@@ -696,23 +871,92 @@ export function SessionPage() {
 
       {/* Session Header */}
       <div className="shrink-0 pb-1 md:pb-4 border-b mb-1 md:mb-4 overflow-visible">
-        <div className="flex items-center justify-between gap-2 md:gap-4 md:flex-wrap">
-          {/* Mobile menu button */}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setMobileMenuOpen(true)}
-            className="md:hidden h-8 w-8 shrink-0"
-          >
-            <Menu className="h-5 w-5" />
-          </Button>
+        {/* Mobile layout - two rows */}
+        <div className="md:hidden space-y-1">
+          {/* First row: menu button, session name, status */}
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setMobileMenuOpen(true)}
+              className="h-8 w-8 shrink-0"
+            >
+              <Menu className="h-5 w-5" />
+            </Button>
+            <div className="min-w-0 flex-1">
+              <h2 className="text-base font-bold flex items-center gap-2">
+                <span className="truncate">{session.name}</span>
+                <span
+                  className={cn(
+                    'inline-block h-2 w-2 rounded-full shrink-0',
+                    session.status === 'running' && 'bg-green-500 animate-pulse',
+                    session.status === 'stopped' && 'bg-gray-400',
+                    session.status === 'error' && 'bg-red-500'
+                  )}
+                />
+              </h2>
+            </div>
+            {/* Session Menu - mobile */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="icon" className="h-8 w-8">
+                  <MoreVertical className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {session.status === 'running' && (
+                  <DropdownMenuItem onClick={handleInterrupt}>
+                    <Square className="h-4 w-4 mr-2" />
+                    Interrupt
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onClick={handleRestart}>
+                  <RotateCcw className="h-4 w-4 mr-2" />
+                  Restart Session
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => starMutation.mutate()}>
+                  <Star
+                    className={cn(
+                      'h-4 w-4 mr-2',
+                      session.starred
+                        ? 'text-amber-500 fill-amber-500'
+                        : 'text-muted-foreground'
+                    )}
+                  />
+                  {session.starred ? 'Unstar' : 'Star'} Session
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => setShowProjectSettings(true)}>
+                  <Settings className="h-4 w-4 mr-2" />
+                  Project Settings
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+          {/* Second row: controls */}
+          <div className="flex items-center gap-2">
+            <SessionControls
+              mode={sessionMode}
+              onModeChange={handleModeChange}
+              onModelChange={handleModelChange}
+              usage={currentUsage}
+              sessionLimit={usageLimits?.session}
+              weeklyAllModels={usageLimits?.weeklyAll}
+              weeklySonnet={usageLimits?.weeklySonnet}
+              variant="mobile"
+            />
+          </div>
+        </div>
 
+        {/* Desktop layout - single row */}
+        <div className="hidden md:flex items-center justify-between gap-2 md:gap-4 md:flex-wrap">
           <div className="min-w-0 flex-1 md:flex-initial">
             <h2 className="text-base md:text-xl font-bold flex items-center gap-2">
               <button
                 onClick={() => starMutation.mutate()}
                 disabled={starMutation.isPending}
-                className="hover:scale-110 transition-transform hidden md:block"
+                className="hover:scale-110 transition-transform"
                 title={session.starred ? 'Unstar session' : 'Star session'}
               >
                 <Star
@@ -734,8 +978,7 @@ export function SessionPage() {
                 )}
               />
             </h2>
-            {/* Hide working directory on mobile to save space */}
-            <p className="hidden md:flex text-sm text-muted-foreground items-center gap-1.5 max-w-full">
+            <p className="flex text-sm text-muted-foreground items-center gap-1.5 max-w-full">
               <FolderOpen className="h-3.5 w-3.5 shrink-0" />
               <span className="truncate">{session.workingDirectory}</span>
             </p>
@@ -752,14 +995,14 @@ export function SessionPage() {
               weeklySonnet={usageLimits?.weeklySonnet}
             />
 
-            {/* CLI Tool selector - hidden on mobile */}
+            {/* CLI Tool selector - desktop only */}
             {cliTools && cliTools.length > 0 && (
-              <div className="relative shrink-0 hidden md:block">
+              <div className="relative shrink-0">
                 <select
                   value={selectedCliTool || ''}
                   onChange={(e) => setSelectedCliTool(e.target.value || null)}
                   className={cn(
-                    "h-9 px-3 rounded-lg border text-sm font-medium transition-all cursor-pointer",
+                    "h-7 px-2 rounded-lg border text-xs font-medium transition-all cursor-pointer",
                     "focus:outline-none focus:ring-2 focus:ring-ring",
                     selectedCliTool
                       ? "bg-orange-500/10 border-orange-500/50 text-orange-600 dark:text-orange-400"
@@ -780,16 +1023,16 @@ export function SessionPage() {
             )}
 
             {isExecutingTool && (
-              <Button variant="outline" onClick={handleCancelCliTool} className="gap-2 h-9 border-orange-500/50 text-orange-600 hover:bg-orange-500/10">
-                <Square className="h-4 w-4" />
+              <Button variant="outline" onClick={handleCancelCliTool} className="gap-2 h-7 text-xs px-2 border-orange-500/50 text-orange-600 hover:bg-orange-500/10">
+                <Square className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">Cancel</span>
               </Button>
             )}
 
-            {/* Session Menu */}
+            {/* Session Menu - desktop */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="icon" className="h-9 w-9">
+                <Button variant="outline" size="icon" className="h-7 w-7">
                   <MoreVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
@@ -812,9 +1055,9 @@ export function SessionPage() {
               </DropdownMenuContent>
             </DropdownMenu>
 
-            {/* View Toggle - desktop only (mobile uses layout header dropdown) */}
+            {/* View Toggle - desktop only */}
             {hasOpenFiles && (
-              <div className="hidden md:flex gap-1 bg-muted rounded-lg p-0.5">
+              <div className="flex gap-1 bg-muted rounded-lg p-0.5">
                 <button
                   onClick={() => setMainView('chat')}
                   className={cn(
@@ -854,8 +1097,8 @@ export function SessionPage() {
         {/* Main Content - Chat or Editor (hidden on mobile for files/git/todos views) */}
         <div className={cn(
           "flex-1 min-h-0 overflow-hidden relative",
-          // Mobile: hide for files, git, todos views
-          (mobileView === 'files' || mobileView === 'git' || mobileView === 'todos') && "hidden md:block"
+          // Mobile: hide for files, git, todos, debug views
+          (mobileView === 'files' || mobileView === 'git' || mobileView === 'todos' || mobileView === 'debug') && "hidden md:block"
         )}>
         {mainView === 'editor' ? (
           <EditorPanel sessionId={id || ''} />
@@ -889,11 +1132,112 @@ export function SessionPage() {
               {/* Messages */}
               <div className="flex flex-col gap-2 md:gap-4 pb-2 md:pb-4">
 
+        {/* Load more button */}
+        {hasMoreMessages && (
+          <div className="flex justify-center py-4 animate-fade-in">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setMessagesToShow(prev => Math.min(prev + 50, timeline.length))}
+              className="gap-2"
+            >
+              Show earlier messages
+              <span className="text-xs text-muted-foreground">
+                ({timeline.length - messagesToShow} more)
+              </span>
+            </Button>
+          </div>
+        )}
+
         {/* Unified timeline: messages and generated images sorted by timestamp (chronological) */}
-        {timeline.map((item, index) => {
+        {visibleTimeline.map((item, index) => timeBlock('timeline-item-render', () => {
           if (item.type === 'message') {
             const message = item.data;
             const isTimestampVisible = visibleTimestamp === message.id;
+
+            // Handle meta messages (compact/resume/restart)
+            if (message.role === 'meta') {
+              return (
+                <div key={message.id}>
+                  <div className="flex items-center gap-4 py-4 px-4 animate-fade-in">
+                    <div className="flex-1 h-px bg-border" />
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      {message.metaType === 'compact' && message.metaData && (
+                        <>
+                          {(message.metaData as any).isActive ? (
+                            <>
+                              <Loader className="h-3 w-3 text-blue-500 animate-spin" />
+                              <span className="text-blue-500">Compacting conversation...</span>
+                            </>
+                          ) : (
+                            <>
+                              <CheckCircle className="h-3 w-3 text-blue-500" />
+                              <span>
+                                Compacted from {((message.metaData as any).startContext || 0).toLocaleString()} to{' '}
+                                {((message.metaData as any).endContext || 0).toLocaleString()} tokens
+                                {(message.metaData as any).duration && (
+                                  <> ({((message.metaData as any).duration / 1000).toFixed(1)}s)</>
+                                )}
+                              </span>
+                            </>
+                          )}
+                        </>
+                      )}
+                      {message.metaType === 'resume' && (
+                        <>
+                          <PlayCircle className="h-3 w-3 text-green-500" />
+                          <span className="text-green-500">Conversation resumed</span>
+                        </>
+                      )}
+                      {message.metaType === 'restart' && (
+                        <>
+                          <RotateCcw className="h-3 w-3 text-orange-500" />
+                          <span className="text-orange-500">Session restarted</span>
+                        </>
+                      )}
+                      {message.metaType === 'command_output' && (
+                        <>
+                          <Terminal className="h-3 w-3 text-blue-500" />
+                          <span className="text-blue-500">Command Output</span>
+                        </>
+                      )}
+                    </div>
+                    <div className="flex-1 h-px bg-border" />
+                  </div>
+                  {/* Command output content */}
+                  {message.metaType === 'command_output' && message.metaData && (
+                    <div className="mt-2 px-4 pb-4 w-full">
+                      <Card className="p-4 bg-muted/50">
+                        <MessageContent
+                          content={(message.metaData as any).output}
+                          role="system"
+                          className="text-sm"
+                        />
+                      </Card>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            // Handle system messages
+            if (message.role === 'system') {
+              return (
+                <div key={message.id} className="flex justify-center my-4 animate-fade-in">
+                  <Card className="bg-muted/50 border-muted max-w-[90%] p-3">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
+                      <Terminal className="w-4 h-4" />
+                      <span>System</span>
+                    </div>
+                    <MessageContent
+                      content={message.content}
+                      role="system"
+                    />
+                  </Card>
+                </div>
+              );
+            }
+
             return (
               <div
                 key={message.id}
@@ -919,9 +1263,12 @@ export function SessionPage() {
                   )}
                   <Card
                     className={cn(
-                      'p-2 md:p-4 cursor-pointer select-none max-w-[calc(100vw-2rem)] md:max-w-none overflow-hidden',
+                      'p-1 md:p-2 cursor-pointer select-none max-w-[calc(100vw-2rem)] md:max-w-none overflow-hidden',
                       message.role === 'user'
-                        ? 'bg-primary text-primary-foreground rounded-br-sm border-primary'
+                        ? cn(
+                            'bg-primary text-primary-foreground rounded-br-sm border-primary',
+                            message.isPending && 'opacity-70'
+                          )
                         : 'bg-card rounded-bl-sm'
                     )}
                     onClick={() => setVisibleTimestamp(isTimestampVisible ? null : message.id)}
@@ -947,12 +1294,10 @@ export function SessionPage() {
                         })}
                       </div>
                     )}
-                    <div className={cn(
-                      'prose prose-sm max-w-none overflow-x-auto',
-                      message.role === 'user' ? 'prose-invert' : 'dark:prose-invert'
-                    )}>
-                      <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{message.content}</ReactMarkdown>
-                    </div>
+                    <MessageContent
+                      content={message.content}
+                      role={message.role as 'user' | 'assistant'}
+                    />
                     {/* Interactive options for assistant messages with choices */}
                     {message.role === 'assistant' && isChoicePrompt(message.content) && (() => {
                       const options = detectOptions(message.content);
@@ -1015,12 +1360,12 @@ export function SessionPage() {
             // Tool Execution
             const exec = item.data;
             return (
-              <div key={`tool-${exec.toolId}-${index}`} className="flex justify-start animate-fade-in w-full">
+              <div key={`tool-${exec.toolId}`} className="flex justify-start animate-fade-in w-full">
                 <ToolExecutionCard execution={exec} />
               </div>
             );
           }
-        })}
+        }))}
 
         {/* Streaming content - at the end */}
         {currentStreamingContent && (
@@ -1061,8 +1406,8 @@ export function SessionPage() {
           <div className={cn(
             "shrink-0 w-72 transition-all duration-200",
             // Mobile: hide unless mobileView matches
-            (mobileView !== 'git' && mobileView !== 'todos' && mobileView !== 'files') && "hidden md:block",
-            (mobileView === 'git' || mobileView === 'todos' || mobileView === 'files') && "md:block w-full md:w-72"
+            (mobileView !== 'git' && mobileView !== 'todos' && mobileView !== 'files' && mobileView !== 'debug') && "hidden md:block",
+            (mobileView === 'git' || mobileView === 'todos' || mobileView === 'files' || mobileView === 'debug') && "md:block w-full md:w-72"
           )}>
             <Card className="h-full flex flex-col bg-card/50 backdrop-blur-sm border">
               {/* Panel Header */}
@@ -1071,10 +1416,12 @@ export function SessionPage() {
                   {rightPanelTab === 'files' && <FolderOpen className="h-4 w-4 text-muted-foreground" />}
                   {rightPanelTab === 'todos' && <ListTodo className="h-4 w-4 text-muted-foreground" />}
                   {rightPanelTab === 'git' && <GitBranch className="h-4 w-4 text-muted-foreground" />}
+                  {rightPanelTab === 'debug' && <Bug className="h-4 w-4 text-muted-foreground" />}
                   <span className="text-sm font-medium">
                     {rightPanelTab === 'files' && 'Files'}
                     {rightPanelTab === 'todos' && 'Tasks'}
                     {rightPanelTab === 'git' && 'Git'}
+                    {rightPanelTab === 'debug' && 'Debug'}
                   </span>
                   {rightPanelTab === 'todos' && currentTodos.length > 0 && (
                     <span className="px-1.5 py-0.5 text-[10px] rounded-full bg-muted text-muted-foreground">
@@ -1143,6 +1490,9 @@ export function SessionPage() {
                 {rightPanelTab === 'git' && (
                   <GitPanel workingDirectory={session.workingDirectory} className="h-full" />
                 )}
+                {rightPanelTab === 'debug' && (
+                  <DebugPanel sessionId={id} />
+                )}
               </div>
             </Card>
           </div>
@@ -1151,29 +1501,37 @@ export function SessionPage() {
 
       {/* Input */}
       <div className="shrink-0 pt-1 md:pt-4 border-t space-y-1 md:space-y-3">
-        {/* Image attachments preview */}
-        {attachments.length > 0 && (
-          <div className="flex flex-wrap gap-2 p-3 rounded-xl bg-muted/50 border animate-scale-in">
-            {attachments.map((attachment) => (
-              <div key={attachment.id} className="relative group">
-                <img
-                  src={attachment.preview}
-                  alt="Attachment"
-                  className="h-16 w-16 object-cover rounded-lg border shadow-sm"
-                />
-                <button
-                  type="button"
-                  onClick={() => removeAttachment(attachment.id)}
-                  className="absolute -top-2 -right-2 p-1 rounded-full bg-destructive text-destructive-foreground shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"
-                >
-                  <X className="h-3 w-3" />
-                </button>
+        {/* Plan Approval Input - replaces regular input when a plan needs approval */}
+        {currentPendingPlanApproval ? (
+          <PlanApprovalInput
+            onRespond={handlePlanApprovalResponse}
+            planContent={currentPendingPlanApproval?.planContent}
+          />
+        ) : (
+          <>
+            {/* Image attachments preview */}
+            {attachments.length > 0 && (
+              <div className="flex flex-wrap gap-2 p-3 rounded-xl bg-muted/50 border animate-scale-in">
+                {attachments.map((attachment) => (
+                  <div key={attachment.id} className="relative group">
+                    <img
+                      src={attachment.preview}
+                      alt="Attachment"
+                      className="h-16 w-16 object-cover rounded-lg border shadow-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(attachment.id)}
+                      className="absolute -top-2 -right-2 p-1 rounded-full bg-destructive text-destructive-foreground shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        )}
+            )}
 
-        <form onSubmit={handleSend} className="flex gap-2 items-center px-1">
+            <form onSubmit={handleSend} className="flex gap-2 items-center px-1">
           {/* Hidden file input */}
           <input
             ref={fileInputRef}
@@ -1186,7 +1544,11 @@ export function SessionPage() {
 
           {/* Image upload button / Working indicator - desktop only */}
           <div className="hidden md:flex">
-            {(currentActivity.type === 'thinking' || currentActivity.type === 'tool' || currentStreamingContent) ? (
+            {isCompacting ? (
+              <div className="h-10 w-10 shrink-0 flex items-center justify-center">
+                <Loader className="h-5 w-5 text-blue-500 animate-spin" />
+              </div>
+            ) : (currentActivity.type === 'thinking' || currentActivity.type === 'tool' || currentStreamingContent) ? (
               <div className="h-10 w-10 shrink-0 flex items-center justify-center">
                 <Brain className="h-5 w-5 text-primary animate-pulse" />
               </div>
@@ -1210,12 +1572,14 @@ export function SessionPage() {
             {showCommandMenu && commands && commands.length > 0 && (
               <CommandMenu
                 commands={commands}
-                filter={input.startsWith('/') ? input.slice(1) : ''}
+                filter={textareaRef.current?.value.startsWith('/') ? textareaRef.current.value.slice(1) : ''}
                 selectedIndex={commandMenuIndex}
                 onSelect={(cmd) => {
-                  setInput(`/${cmd.name} `);
+                  if (textareaRef.current) {
+                    textareaRef.current.value = `/${cmd.name} `;
+                    textareaRef.current.focus();
+                  }
                   setShowCommandMenu(false);
-                  textareaRef.current?.focus();
                 }}
                 onClose={() => setShowCommandMenu(false)}
               />
@@ -1223,11 +1587,13 @@ export function SessionPage() {
             <div className="relative flex-1">
               <textarea
                 ref={textareaRef}
-                value={input}
                 rows={1}
                 onChange={(e) => {
                   const value = e.target.value;
-                  setInput(value);
+                  // Auto-resize textarea
+                  e.target.style.height = 'auto';
+                  e.target.style.height = e.target.scrollHeight + 'px';
+
                   // Show command menu when typing /
                   if (value.startsWith('/') && !value.includes(' ')) {
                     setShowCommandMenu(true);
@@ -1248,8 +1614,9 @@ export function SessionPage() {
                 }}
                 onKeyDown={(e) => {
                   if (showCommandMenu) {
+                    const currentValue = textareaRef.current?.value || '';
                     const filteredCommands = commands?.filter(cmd =>
-                      cmd.name.toLowerCase().includes((input.slice(1) || '').toLowerCase())
+                      cmd.name.toLowerCase().includes((currentValue.slice(1) || '').toLowerCase())
                     ) || [];
 
                     if (e.key === 'ArrowDown') {
@@ -1261,8 +1628,8 @@ export function SessionPage() {
                     } else if (e.key === 'Tab' || e.key === 'Enter') {
                       e.preventDefault();
                       const selected = filteredCommands[commandMenuIndex];
-                      if (selected) {
-                        setInput(`/${selected.name} `);
+                      if (selected && textareaRef.current) {
+                        textareaRef.current.value = `/${selected.name} `;
                         setShowCommandMenu(false);
                       }
                     } else if (e.key === 'Escape') {
@@ -1278,13 +1645,15 @@ export function SessionPage() {
                   : "Message..."
                 }
                 className={cn(
-                  "w-full min-h-[40px] md:min-h-[44px] max-h-[200px] pl-3 pr-10 md:px-4 py-2 md:py-2.5 rounded border bg-background focus:outline-none focus:ring-2 focus:ring-ring text-base resize-none",
+                  "w-full min-h-[40px] md:min-h-[44px] max-h-[200px] pl-3 pr-10 md:px-4 py-2 md:py-2.5 rounded border bg-background focus:outline-none focus:ring-2 focus:ring-ring text-base resize-none scrollbar-hide",
                   selectedCliTool && "border-orange-500/30 focus:ring-orange-500/50"
                 )}
               />
               {/* Mobile: attach button inside input / thinking indicator */}
               <div className="md:hidden absolute right-2 top-1/2 -translate-y-[calc(50%+1px)]">
-                {(currentActivity.type === 'thinking' || currentActivity.type === 'tool' || currentStreamingContent) ? (
+                {isCompacting ? (
+                  <Loader className="h-5 w-5 text-blue-500 animate-spin" />
+                ) : (currentActivity.type === 'thinking' || currentActivity.type === 'tool' || currentStreamingContent) ? (
                   <Brain className="h-5 w-5 text-primary animate-pulse" />
                 ) : (
                   <button
@@ -1300,7 +1669,9 @@ export function SessionPage() {
             </div>
           </div>
 
-        </form>
+            </form>
+          </>
+        )}
       </div>
 
       {/* Permission Approval Dialog */}
@@ -1412,6 +1783,7 @@ export function SessionPage() {
         </DialogContent>
       </Dialog>
 
-    </div>
-  );
+      </div>
+    </>
+  ));
 }

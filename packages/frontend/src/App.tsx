@@ -4,6 +4,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { useSocket } from '@/hooks/useSocket';
 import { Layout } from '@/components/layout/Layout';
 import { Toaster } from '@/components/ui/toaster';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 // Lazy load pages for code splitting
 const LoginPage = lazy(() => import('@/pages/LoginPage').then(m => ({ default: m.LoginPage })));
@@ -48,7 +49,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
-    <>
+    <ErrorBoundary>
       <Suspense fallback={<PageLoader />}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
@@ -69,6 +70,6 @@ export default function App() {
         </Routes>
       </Suspense>
       <Toaster />
-    </>
+    </ErrorBoundary>
   );
 }

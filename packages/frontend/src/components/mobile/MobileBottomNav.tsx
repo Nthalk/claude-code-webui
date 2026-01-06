@@ -1,7 +1,7 @@
-import { MessageSquare, FolderTree, GitBranch, Code2, ListTodo } from 'lucide-react';
+import { MessageSquare, FolderTree, GitBranch, Code2, ListTodo, Bug } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type MobileView = 'chat' | 'files' | 'git' | 'editor' | 'todos';
+export type MobileView = 'chat' | 'files' | 'git' | 'editor' | 'todos' | 'debug';
 
 interface MobileBottomNavProps {
   activeView: MobileView;
@@ -26,6 +26,7 @@ export function MobileBottomNav({
     { id: 'git', icon: GitBranch, label: 'Git', badge: changesCount > 0 ? changesCount : undefined },
     { id: 'editor', icon: Code2, label: 'Editor', show: hasOpenFiles },
     { id: 'todos', icon: ListTodo, label: 'Todos', badge: todosCount > 0 ? todosCount : undefined, show: hasTodos },
+    { id: 'debug', icon: Bug, label: 'Debug' },
   ];
 
   const visibleItems = navItems.filter((item) => item.show !== false);

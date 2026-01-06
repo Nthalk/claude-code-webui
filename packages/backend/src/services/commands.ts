@@ -10,7 +10,7 @@ const BUILTIN_COMMAND_DEFS: Record<BuiltinCommandName, Omit<Command, 'name' | 's
     arguments: [],
   },
   clear: {
-    description: 'Clear chat history (UI only)',
+    description: 'Clear chat history and restart Claude session',
     arguments: [],
   },
   model: {
@@ -26,7 +26,11 @@ const BUILTIN_COMMAND_DEFS: Record<BuiltinCommandName, Omit<Command, 'name' | 's
     arguments: [],
   },
   compact: {
-    description: 'Toggle compact mode',
+    description: 'Compact conversation history to save context',
+    arguments: [],
+  },
+  context: {
+    description: 'Show current context usage and model information',
     arguments: [],
   },
 };
@@ -227,15 +231,15 @@ export class CommandService {
       case 'clear':
         return {
           success: true,
-          action: 'clear',
-          response: 'Chat history cleared.',
+          action: 'clear_with_restart',
+          response: 'Clearing chat history and restarting Claude session...',
         };
 
       case 'model':
         if (parsed.args.length === 0) {
           return {
             success: true,
-            response: `Current model: ${context.currentModel || 'claude-sonnet-4-20250514'}`,
+            response: `Current model: ${context.currentModel || 'claude-opus-4-20250514'}`,
           };
         }
         return {
@@ -250,7 +254,7 @@ export class CommandService {
           success: true,
           response: [
             `Session: ${context.sessionId || 'N/A'}`,
-            `Model: ${context.currentModel || 'claude-sonnet-4-20250514'}`,
+            `Model: ${context.currentModel || 'claude-opus-4-20250514'}`,
             `Project: ${context.projectPath || 'None'}`,
           ].join('\n'),
         };
@@ -275,9 +279,21 @@ export class CommandService {
       case 'compact':
         return {
           success: true,
-          action: 'clear',
-          data: { toggleCompact: true },
-          response: 'Compact mode toggled.',
+          action: 'compact_context',
+          response: 'Compacting conversation history...',
+        };
+
+      case 'context':
+        // Check if suppressOutput was passed in args
+        const suppressOutput = parsed.args.includes('--suppress-output');
+        return {
+          success: true,
+          action: 'send_claude_command',
+          response: '/context',
+          data: {
+            command: 'context',
+            suppressOutput
+          },
         };
 
       default:

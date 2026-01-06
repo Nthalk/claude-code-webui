@@ -22,6 +22,9 @@ const FILE_TOOLS = ['Read', 'Write', 'Edit', 'Glob'];
 // Tools that use prefix matching with :*
 const PREFIX_TOOLS = ['Bash'];
 
+// Tools that require exact matches (no wildcards)
+const EXACT_MATCH_TOOLS = ['WebSearch', 'WebFetch'];
+
 // Validate pattern syntax and return error if invalid
 interface PatternValidationError {
   message: string;
@@ -64,12 +67,24 @@ function validatePatternSyntax(pattern: string): PatternValidationError | null {
     }
   }
 
+  // Check for wildcards on exact match tools
+  if (EXACT_MATCH_TOOLS.includes(patternTool) && patternContent) {
+    // Check for any wildcard patterns
+    if (patternContent.includes('*') || patternContent.includes('?') || patternContent.includes(':')) {
+      const cleanPattern = patternContent.replace(/[*?:]/g, '');
+      return {
+        message: `${patternTool} does not support wildcards. Use exact search terms only.`,
+        suggestion: cleanPattern ? `${patternTool}(${cleanPattern})` : patternTool,
+      };
+    }
+  }
+
   return null;
 }
 
 interface PermissionApprovalDialogProps {
   permission: PendingPermission;
-  onRespond: (action: PermissionAction, pattern?: string) => void;
+  onRespond: (action: PermissionAction, pattern?: string, reason?: string) => void;
 }
 
 // Get icon for tool name
@@ -156,6 +171,11 @@ function testPattern(pattern: string, testString: string): boolean {
     return testString === patternContent;
   }
 
+  // For exact match tools, only exact matches allowed
+  if (EXACT_MATCH_TOOLS.includes(patternTool)) {
+    return testString === patternContent;
+  }
+
   // Default: prefix matching with :*
   if (patternContent.endsWith(':*')) {
     const prefix = patternContent.slice(0, -2);
@@ -172,6 +192,8 @@ export function PermissionApprovalDialog({ permission, onRespond }: PermissionAp
   const [pattern, setPattern] = useState(permission.suggestedPattern);
   const [testValue, setTestValue] = useState(getToolPreview(permission.toolName, permission.toolInput));
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showDenyReason, setShowDenyReason] = useState(false);
+  const [denyReason, setDenyReason] = useState('');
 
   const Icon = getToolIcon(permission.toolName);
   const preview = getToolPreview(permission.toolName, permission.toolInput);
@@ -185,6 +207,14 @@ export function PermissionApprovalDialog({ permission, onRespond }: PermissionAp
         <>
           Use glob patterns: <code>*</code> matches any filename, <code>**</code> matches any path
           (e.g., <code>/src/**</code> matches all files in src)
+        </>
+      );
+    }
+    if (EXACT_MATCH_TOOLS.includes(permission.toolName)) {
+      return (
+        <>
+          Use exact search terms only. Wildcards are not supported.
+          (e.g., <code>WebSearch(typescript tutorial)</code>)
         </>
       );
     }
@@ -203,6 +233,8 @@ export function PermissionApprovalDialog({ permission, onRespond }: PermissionAp
         // For allow_project and allow_global, include the pattern
         if (action === 'allow_project' || action === 'allow_global') {
           await onRespond(action, pattern);
+        } else if (action === 'deny' && denyReason) {
+          await onRespond(action, undefined, denyReason);
         } else {
           await onRespond(action);
         }
@@ -210,7 +242,7 @@ export function PermissionApprovalDialog({ permission, onRespond }: PermissionAp
         setIsSubmitting(false);
       }
     },
-    [onRespond, pattern]
+    [onRespond, pattern, denyReason]
   );
 
   return (
@@ -275,6 +307,8 @@ export function PermissionApprovalDialog({ permission, onRespond }: PermissionAp
                     placeholder={
                       FILE_TOOLS.includes(permission.toolName)
                         ? 'e.g., Read(/src/**)'
+                        : EXACT_MATCH_TOOLS.includes(permission.toolName)
+                        ? `e.g., ${permission.toolName}(specific search terms)`
                         : 'e.g., Bash(git checkout:*)'
                     }
                   />
@@ -341,14 +375,40 @@ export function PermissionApprovalDialog({ permission, onRespond }: PermissionAp
               Allow Once
             </button>
             <button
-              onClick={() => handleRespond('deny')}
+              onClick={() => {
+                if (showDenyReason && denyReason.trim()) {
+                  handleRespond('deny');
+                } else if (!showDenyReason) {
+                  setShowDenyReason(true);
+                }
+              }}
               disabled={isSubmitting}
               className="flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium disabled:opacity-50 transition-colors"
             >
               <ShieldX className="h-4 w-4" />
-              Deny
+              {showDenyReason ? 'Confirm Deny' : 'Deny'}
             </button>
           </div>
+
+          {/* Deny reason input */}
+          {showDenyReason && (
+            <div className="space-y-2 p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-lg">
+              <label className="text-sm font-medium text-red-700 dark:text-red-300 block">
+                Rejection Reason (optional but recommended)
+              </label>
+              <textarea
+                value={denyReason}
+                onChange={(e) => setDenyReason(e.target.value)}
+                placeholder="Explain why this operation should not proceed or suggest what Claude should do instead..."
+                className="w-full p-2 bg-white dark:bg-background border border-red-300 dark:border-red-700 rounded text-sm min-h-[80px] resize-none"
+                autoFocus
+              />
+              <p className="text-xs text-red-600 dark:text-red-400">
+                Providing a reason helps Claude understand your preferences and adjust its approach.
+              </p>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-2">
             <button
               onClick={() => handleRespond('allow_project')}

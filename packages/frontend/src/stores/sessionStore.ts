@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Session, Message, SessionStatus, UsageData, ToolExecution, PendingPermission, PendingUserQuestion } from '@claude-code-webui/shared';
+import type { Session, Message, SessionStatus, UsageData, ToolExecution, PendingPermission, PendingUserQuestion, PendingPlanApproval } from '@claude-code-webui/shared';
 
 // Activity state for showing what Claude is doing
 export interface ActivityState {
@@ -45,6 +45,8 @@ interface SessionState {
   messages: Record<string, Message[]>;
   streamingContent: Record<string, string>;
   thinking: Record<string, boolean>;
+  compacting: Record<string, boolean>;
+  compactingBuffer: Record<string, Message[]>;
   activity: Record<string, ActivityState>;
   activeAgent: Record<string, AgentState | null>;
   todos: Record<string, TodoItem[]>;
@@ -53,6 +55,7 @@ interface SessionState {
   toolExecutions: Record<string, ToolExecution[]>;
   pendingPermissions: Record<string, PendingPermission | null>;
   pendingUserQuestions: Record<string, PendingUserQuestion | null>;
+  pendingPlanApprovals: Record<string, PendingPlanApproval | null>;
 
   // File Tree state
   fileTreeOpen: Record<string, boolean>;
@@ -63,12 +66,12 @@ interface SessionState {
   activeFileTab: Record<string, string | null>;
 
   // Right panel state (global, not per-session)
-  rightPanelTab: 'files' | 'todos' | 'git' | null;
-  setRightPanelTab: (tab: 'files' | 'todos' | 'git' | null) => void;
+  rightPanelTab: 'files' | 'todos' | 'git' | 'debug' | null;
+  setRightPanelTab: (tab: 'files' | 'todos' | 'git' | 'debug' | null) => void;
 
   // Mobile view state (for session pages)
-  mobileView: 'chat' | 'files' | 'git' | 'editor' | 'todos';
-  setMobileView: (view: 'chat' | 'files' | 'git' | 'editor' | 'todos') => void;
+  mobileView: 'chat' | 'files' | 'git' | 'editor' | 'todos' | 'debug';
+  setMobileView: (view: 'chat' | 'files' | 'git' | 'editor' | 'todos' | 'debug') => void;
 
   // Mobile menu state (shared between Layout and SessionPage)
   mobileMenuOpen: boolean;
@@ -89,6 +92,9 @@ interface SessionState {
 
   updateSessionStatus: (sessionId: string, status: SessionStatus) => void;
   setThinking: (sessionId: string, isThinking: boolean) => void;
+  setCompacting: (sessionId: string, isCompacting: boolean) => void;
+  addToCompactingBuffer: (sessionId: string, message: Message) => void;
+  flushCompactingBuffer: (sessionId: string) => void;
   setActivity: (sessionId: string, activity: ActivityState) => void;
   setActiveAgent: (sessionId: string, agent: AgentState | null) => void;
   setTodos: (sessionId: string, todos: TodoItem[]) => void;
@@ -101,6 +107,7 @@ interface SessionState {
   clearToolExecutions: (sessionId: string) => void;
   setPendingPermission: (sessionId: string, permission: PendingPermission | null) => void;
   setPendingUserQuestion: (sessionId: string, question: PendingUserQuestion | null) => void;
+  setPendingPlanApproval: (sessionId: string, approval: PendingPlanApproval | null) => void;
 
   // File Tree actions
   setFileTreeOpen: (sessionId: string, open: boolean) => void;
@@ -120,6 +127,8 @@ export const useSessionStore = create<SessionState>((set) => ({
   messages: {},
   streamingContent: {},
   thinking: {},
+  compacting: {},
+  compactingBuffer: {},
   activity: {},
   activeAgent: {},
   todos: {},
@@ -128,22 +137,29 @@ export const useSessionStore = create<SessionState>((set) => ({
   toolExecutions: {},
   pendingPermissions: {},
   pendingUserQuestions: {},
+  pendingPlanApprovals: {},
   fileTreeOpen: {},
   selectedFile: {},
   openFiles: {},
   activeFileTab: {},
   rightPanelTab: (() => {
     const saved = localStorage.getItem('right-panel-tab');
-    return saved ? (saved as 'files' | 'todos' | 'git' | null) : null;
+    console.log('Loading rightPanelTab from localStorage:', saved);
+    // Validate the saved value
+    const validTabs = ['files', 'todos', 'git', 'debug', null];
+    const value = saved && validTabs.includes(saved) ? saved : null;
+    return value as 'files' | 'todos' | 'git' | 'debug' | null;
   })(),
 
   setRightPanelTab: (tab) => {
+    console.log('setRightPanelTab called with:', tab);
     if (tab) {
       localStorage.setItem('right-panel-tab', tab);
     } else {
       localStorage.removeItem('right-panel-tab');
     }
     set({ rightPanelTab: tab });
+    console.log('rightPanelTab set to:', tab);
   },
 
   mobileView: 'chat',
@@ -232,6 +248,24 @@ export const useSessionStore = create<SessionState>((set) => ({
   setThinking: (sessionId, isThinking) =>
     set((state) => ({
       thinking: { ...state.thinking, [sessionId]: isThinking },
+    })),
+
+  setCompacting: (sessionId, isCompacting) =>
+    set((state) => ({
+      compacting: { ...state.compacting, [sessionId]: isCompacting },
+    })),
+
+  addToCompactingBuffer: (sessionId, message) =>
+    set((state) => ({
+      compactingBuffer: {
+        ...state.compactingBuffer,
+        [sessionId]: [...(state.compactingBuffer[sessionId] || []), message],
+      },
+    })),
+
+  flushCompactingBuffer: (sessionId) =>
+    set((state) => ({
+      compactingBuffer: { ...state.compactingBuffer, [sessionId]: [] },
     })),
 
   setActivity: (sessionId, activity) =>
@@ -343,6 +377,14 @@ export const useSessionStore = create<SessionState>((set) => ({
       pendingUserQuestions: {
         ...state.pendingUserQuestions,
         [sessionId]: question,
+      },
+    })),
+
+  setPendingPlanApproval: (sessionId, approval) =>
+    set((state) => ({
+      pendingPlanApprovals: {
+        ...state.pendingPlanApprovals,
+        [sessionId]: approval,
       },
     })),
 

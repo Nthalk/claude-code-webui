@@ -6,6 +6,8 @@ export interface UserSettings {
   defaultWorkingDir: string | null;
   allowedTools: string[];
   customSystemPrompt: string | null;
+  autoCompactEnabled: boolean;
+  autoCompactThreshold: number; // percentage 0-100
 }
 
 export interface UpdateSettingsInput {
@@ -13,6 +15,8 @@ export interface UpdateSettingsInput {
   defaultWorkingDir?: string | null;
   allowedTools?: string[];
   customSystemPrompt?: string | null;
+  autoCompactEnabled?: boolean;
+  autoCompactThreshold?: number;
 }
 
 export interface ClaudeSettings {

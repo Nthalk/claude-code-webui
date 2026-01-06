@@ -83,6 +83,11 @@ export function setupWebSocket(httpServer: HttpServer): Server {
       socket.data.subscribedSessions.add(sessionId);
       socket.join(`session:${sessionId}`);
       console.log(`Socket ${socket.id} subscribed to session ${sessionId}`);
+
+      // Emit current usage if session is running
+      if (processManager.isSessionRunning(sessionId)) {
+        processManager.getCurrentUsage(sessionId);
+      }
     });
 
     // Unsubscribe from session output
@@ -205,6 +210,19 @@ export function setupWebSocket(httpServer: HttpServer): Server {
       }
     });
 
+    // Resume a session (used after backend restart)
+    socket.on('session:resume', async (sessionId) => {
+      console.log(`Resume request for session ${sessionId} from user ${socket.data.userId}`);
+      try {
+        await processManager.resumeSession(sessionId, socket.data.userId);
+      } catch (err) {
+        socket.emit('session:error', {
+          sessionId,
+          error: err instanceof Error ? err.message : 'Failed to resume session',
+        });
+      }
+    });
+
     // Heartbeat - check if session is still alive
     socket.on('heartbeat', ({ sessionId }) => {
       // Session is "ok" if it has an active process tracked by the manager
@@ -217,7 +235,7 @@ export function setupWebSocket(httpServer: HttpServer): Server {
     });
 
     // Reconnect to a running session
-    socket.on('session:reconnect', ({ sessionId, lastTimestamp }) => {
+    socket.on('session:reconnect', async ({ sessionId, lastTimestamp }) => {
       console.log(`Reconnect request for session ${sessionId} from socket ${socket.id}`);
 
       // ALWAYS subscribe to the session room, regardless of running state
@@ -226,7 +244,32 @@ export function setupWebSocket(httpServer: HttpServer): Server {
       socket.join(`session:${sessionId}`);
       console.log(`Socket ${socket.id} joined session room ${sessionId}`);
 
-      const isRunning = processManager.isSessionRunning(sessionId);
+      let isRunning = processManager.isSessionRunning(sessionId);
+
+      // If not running, check if the session was previously active and should be resumed
+      if (!isRunning) {
+        try {
+          const db = await import('../db');
+          const session = db.getDatabase()
+            .prepare('SELECT status, session_state, claude_session_id FROM sessions WHERE id = ? AND user_id = ?')
+            .get(sessionId, socket.data.userId) as { status: string; session_state: string; claude_session_id: string | null } | undefined;
+
+          if (session && (session.status === 'running' || session.session_state === 'active') && session.claude_session_id) {
+            console.log(`[SOCKET] Session ${sessionId} was previously active, resuming...`);
+
+            // Resume the session
+            await processManager.resumeSession(sessionId, socket.data.userId);
+
+            // Give the process a moment to start
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            // Check if it's running now
+            isRunning = processManager.isSessionRunning(sessionId);
+          }
+        } catch (error) {
+          console.error(`[SOCKET] Error checking/resuming session:`, error);
+        }
+      }
 
       if (isRunning) {
         // Mark session as reconnected
@@ -243,6 +286,9 @@ export function setupWebSocket(httpServer: HttpServer): Server {
           bufferedMessages,
           isRunning: true,
         });
+
+        // Emit current usage
+        processManager.getCurrentUsage(sessionId);
       } else {
         // Session is not running, send empty reconnection data
         socket.emit('session:reconnected', {
@@ -250,6 +296,27 @@ export function setupWebSocket(httpServer: HttpServer): Server {
           bufferedMessages: [],
           isRunning: false,
         });
+      }
+
+      // Check for pending permissions and re-emit them to the reconnecting client
+      // Import the pending requests directly from the permissions module
+      const { getPendingPermissionsForSession } = await import('../routes/permissions');
+      const pendingPermissions = getPendingPermissionsForSession(sessionId);
+
+      if (pendingPermissions.length > 0) {
+        console.log(`[SOCKET] Re-emitting ${pendingPermissions.length} pending permissions for session ${sessionId}`);
+
+        // Emit each pending permission to the reconnecting client
+        for (const permission of pendingPermissions) {
+          socket.emit('session:permission_request', {
+            sessionId: permission.sessionId,
+            requestId: permission.requestId,
+            toolName: permission.toolName,
+            toolInput: permission.toolInput,
+            description: permission.description,
+            suggestedPattern: permission.suggestedPattern,
+          });
+        }
       }
     });
 

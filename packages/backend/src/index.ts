@@ -28,6 +28,7 @@ import claudeRoutes from './routes/claude';
 import claudeConfigRoutes from './routes/claude-config';
 import claudeSettingsRoutes from './routes/claude-settings';
 import permissionsRoutes from './routes/permissions';
+import planRoutes from './routes/plan';
 import userQuestionsRoutes from './routes/user-questions';
 import usageRoutes from './routes/usage';
 import cliToolsRoutes from './routes/cli-tools';
@@ -100,6 +101,7 @@ async function main() {
   app.use('/api/claude-config', claudeConfigRoutes);
   app.use('/api/claude-settings', claudeSettingsRoutes);
   app.use('/api/permissions', permissionsRoutes);
+  app.use('/api/plan', planRoutes);
   app.use('/api/user-questions', userQuestionsRoutes);
   app.use('/api/usage', usageRoutes);
   app.use('/api/cli-tools', cliToolsRoutes);

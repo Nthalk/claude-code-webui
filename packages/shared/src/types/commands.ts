@@ -19,7 +19,7 @@ export interface CommandExecutionResult {
   success: boolean;
   response?: string;
   error?: string;
-  action?: 'clear' | 'model_change' | 'send_message';
+  action?: 'clear' | 'clear_with_restart' | 'model_change' | 'send_message' | 'compact_context' | 'send_claude_command';
   data?: Record<string, unknown>;
 }
 
@@ -31,6 +31,7 @@ export const BUILTIN_COMMANDS = [
   'status',
   'cost',
   'compact',
+  'context',
 ] as const;
 
 export type BuiltinCommandName = typeof BUILTIN_COMMANDS[number];

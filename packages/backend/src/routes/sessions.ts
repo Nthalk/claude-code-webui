@@ -8,6 +8,7 @@ import { requireAuth, type AuthenticatedRequest } from '../middleware/auth';
 import { getDatabase } from '../db';
 import { AppError } from '../middleware/errorHandler';
 import { config } from '../config';
+import { getProcessManager } from '../websocket';
 
 const router = Router();
 
@@ -55,7 +56,9 @@ router.get('/', requireAuth, (req, res) => {
   const sessions = db
     .prepare(
       `SELECT id, user_id as userId, name, working_directory as workingDirectory,
-              claude_session_id as claudeSessionId, status, last_message as lastMessage,
+              claude_session_id as claudeSessionId, status,
+              COALESCE(session_state, 'inactive') as sessionState,
+              last_message as lastMessage,
               starred, created_at as createdAt, updated_at as updatedAt
        FROM sessions WHERE user_id = ? ORDER BY starred DESC, updated_at DESC`
     )
@@ -74,7 +77,9 @@ router.get('/:id', requireAuth, (req, res) => {
   const rawSession = db
     .prepare(
       `SELECT id, user_id as userId, name, working_directory as workingDirectory,
-              claude_session_id as claudeSessionId, status, last_message as lastMessage,
+              claude_session_id as claudeSessionId, status,
+              COALESCE(session_state, 'inactive') as sessionState,
+              last_message as lastMessage,
               starred, created_at as createdAt, updated_at as updatedAt
        FROM sessions WHERE id = ? AND user_id = ?`
     )
@@ -247,15 +252,33 @@ router.patch('/:id/star', requireAuth, (req, res) => {
 // Delete session
 router.delete('/:id', requireAuth, (req, res) => {
   const userId = (req as AuthenticatedRequest).userId;
+  const sessionId = req.params.id as string;
   const db = getDatabase();
 
-  const result = db
-    .prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?')
-    .run(req.params.id, userId);
+  // First verify session exists and belongs to user
+  const session = db
+    .prepare('SELECT id FROM sessions WHERE id = ? AND user_id = ?')
+    .get(sessionId, userId);
 
-  if (result.changes === 0) {
+  if (!session) {
     throw new AppError('Session not found', 404, 'NOT_FOUND');
   }
+
+  // Stop the Claude process if running
+  try {
+    const processManager = getProcessManager();
+    processManager.stopSession(sessionId, userId);
+  } catch (error) {
+    // Process manager might not be initialized, or session might not be running
+    console.log(`Could not stop session process: ${error}`);
+  }
+
+  // Delete related data first (foreign key constraints)
+  db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
+  db.prepare('DELETE FROM tool_executions WHERE session_id = ?').run(sessionId);
+
+  // Delete the session
+  db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
 
   res.json({ success: true });
 });
@@ -276,12 +299,19 @@ router.get('/:id/messages', requireAuth, (req, res) => {
 
   const messages = db
     .prepare(
-      `SELECT id, session_id as sessionId, role, content, created_at as createdAt
+      `SELECT id, session_id as sessionId, role, content, created_at as createdAt,
+              meta_type as metaType, meta_data as metaData
        FROM messages WHERE session_id = ? ORDER BY created_at ASC`
     )
-    .all(req.params.id);
+    .all(req.params.id) as any[];
 
-  res.json({ success: true, data: messages });
+  // Parse meta_data JSON for meta messages
+  const parsed = messages.map(msg => ({
+    ...msg,
+    metaData: msg.metaData ? JSON.parse(msg.metaData) : undefined,
+  }));
+
+  res.json({ success: true, data: parsed });
 });
 
 // Get session tool executions
@@ -318,7 +348,7 @@ router.get('/:id/tool-executions', requireAuth, (req, res) => {
 });
 
 // Delete all messages for a session (clear chat)
-router.delete('/:id/messages', requireAuth, (req, res) => {
+router.delete('/:id/messages', requireAuth, async (req, res) => {
   const userId = (req as AuthenticatedRequest).userId;
   const db = getDatabase();
 
@@ -330,6 +360,14 @@ router.delete('/:id/messages', requireAuth, (req, res) => {
   if (!session) {
     throw new AppError('Session not found', 404, 'NOT_FOUND');
   }
+
+  // Deny any pending permissions before clearing
+  const { denyPendingPermissionsForSession } = await import('./permissions');
+  denyPendingPermissionsForSession(req.params.id!);
+
+  // Deny any pending plan approvals before clearing
+  const { denyPendingPlanApprovalsForSession } = await import('./plan');
+  denyPendingPlanApprovalsForSession(req.params.id!);
 
   // Delete all messages and tool executions for this session
   const messagesResult = db
@@ -414,6 +452,171 @@ router.get('/:id/images/:filename', async (req, res, next) => {
     }
   } catch (err) {
     next(err);
+  }
+});
+
+// Get pending messages for a session
+router.get('/:id/pending-messages', requireAuth, (req, res) => {
+  const userId = (req as AuthenticatedRequest).userId;
+  const db = getDatabase();
+
+  // Verify session ownership
+  const session = db
+    .prepare('SELECT id FROM sessions WHERE id = ? AND user_id = ?')
+    .get(req.params.id, userId);
+
+  if (!session) {
+    throw new AppError('Session not found', 404, 'NOT_FOUND');
+  }
+
+  const pendingMessages = db
+    .prepare(
+      `SELECT id, session_id as sessionId, content, created_at as createdAt
+       FROM pending_messages WHERE session_id = ? ORDER BY created_at ASC`
+    )
+    .all(req.params.id);
+
+  res.json({ success: true, data: pendingMessages });
+});
+
+// Send raw JSON message to Claude (for debug panel)
+router.post('/:id/raw-json', requireAuth, async (req, res) => {
+  const userId = (req as AuthenticatedRequest).userId;
+  const sessionId = req.params.id;
+  const { message } = req.body;
+
+  if (!userId || !sessionId) {
+    throw new AppError('Not authenticated', 401, 'UNAUTHORIZED');
+  }
+
+  if (!message || typeof message !== 'object') {
+    throw new AppError('Invalid JSON message', 400, 'INVALID_INPUT');
+  }
+
+  try {
+    const processManager = getProcessManager();
+    await processManager.sendRawJson(sessionId, userId, message);
+    res.json({ success: true });
+  } catch (error) {
+    throw new AppError(
+      error instanceof Error ? error.message : 'Failed to send raw JSON',
+      400,
+      'SEND_FAILED'
+    );
+  }
+});
+
+// Add a pending message to a session
+router.post('/:id/pending-messages', requireAuth, (req, res) => {
+  const userId = (req as AuthenticatedRequest).userId;
+  const db = getDatabase();
+
+  // Verify session ownership
+  const session = db
+    .prepare('SELECT id FROM sessions WHERE id = ? AND user_id = ?')
+    .get(req.params.id, userId);
+
+  if (!session) {
+    throw new AppError('Session not found', 404, 'NOT_FOUND');
+  }
+
+  const { content } = req.body;
+  if (!content || typeof content !== 'string') {
+    throw new AppError('Content is required', 400, 'VALIDATION_ERROR');
+  }
+
+  const id = nanoid();
+  db.prepare(
+    `INSERT INTO pending_messages (id, session_id, content) VALUES (?, ?, ?)`
+  ).run(id, req.params.id, content);
+
+  // Update session state to has-pending
+  db.prepare(
+    `UPDATE sessions SET session_state = 'has-pending', updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+  ).run(req.params.id);
+
+  res.json({ success: true, data: { id, sessionId: req.params.id, content } });
+});
+
+// Delete all pending messages for a session (after processing)
+router.delete('/:id/pending-messages', requireAuth, (req, res) => {
+  const userId = (req as AuthenticatedRequest).userId;
+  const db = getDatabase();
+
+  // Verify session ownership
+  const session = db
+    .prepare('SELECT id FROM sessions WHERE id = ? AND user_id = ?')
+    .get(req.params.id, userId);
+
+  if (!session) {
+    throw new AppError('Session not found', 404, 'NOT_FOUND');
+  }
+
+  const result = db
+    .prepare('DELETE FROM pending_messages WHERE session_id = ?')
+    .run(req.params.id);
+
+  // If no more pending messages, update state to inactive (unless actively running)
+  const remainingPending = db
+    .prepare('SELECT COUNT(*) as count FROM pending_messages WHERE session_id = ?')
+    .get(req.params.id) as { count: number };
+
+  if (remainingPending.count === 0) {
+    db.prepare(
+      `UPDATE sessions SET session_state = CASE
+         WHEN status = 'running' THEN 'active'
+         ELSE 'inactive'
+       END, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(req.params.id);
+  }
+
+  res.json({ success: true, data: { deleted: result.changes } });
+});
+
+// Update session state
+router.patch('/:id/state', requireAuth, (req, res) => {
+  const userId = (req as AuthenticatedRequest).userId;
+  const db = getDatabase();
+
+  const { state } = req.body;
+  if (!state || !['inactive', 'active', 'has-pending'].includes(state)) {
+    throw new AppError('Invalid state', 400, 'VALIDATION_ERROR');
+  }
+
+  const result = db
+    .prepare('UPDATE sessions SET session_state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?')
+    .run(state, req.params.id, userId);
+
+  if (result.changes === 0) {
+    throw new AppError('Session not found', 404, 'NOT_FOUND');
+  }
+
+  res.json({ success: true, data: { state } });
+});
+
+// Restart session (clear Claude context and start fresh)
+router.post('/:id/restart', requireAuth, async (req, res) => {
+  const userId = (req as AuthenticatedRequest).userId;
+  const sessionId = req.params.id!;
+  const db = getDatabase();
+
+  // Verify session ownership
+  const session = db
+    .prepare('SELECT id FROM sessions WHERE id = ? AND user_id = ?')
+    .get(sessionId, userId);
+
+  if (!session) {
+    throw new AppError('Session not found', 404, 'NOT_FOUND');
+  }
+
+  try {
+    const processManager = getProcessManager();
+    const userIdStr = userId as string;
+    await processManager.restartSession(sessionId, userIdStr);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Failed to restart session:', error);
+    throw new AppError('Failed to restart session', 500, 'RESTART_FAILED');
   }
 });
 

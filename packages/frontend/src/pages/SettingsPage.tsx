@@ -814,6 +814,74 @@ export function SettingsPage() {
                 })}
               </div>
             </section>
+
+            {/* Auto-Compacting */}
+            <section>
+              <h2 className="text-lg font-semibold mb-3">Auto-Compacting</h2>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-4 rounded-lg bg-muted/50">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-lg bg-primary/10">
+                      <Loader2 className="h-4 w-4 text-primary" />
+                    </div>
+                    <div>
+                      <p className="font-medium">Auto-compact conversations</p>
+                      <p className="text-sm text-muted-foreground">
+                        Automatically compress older messages when context usage reaches threshold
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      updateSettingsMutation.mutate({
+                        autoCompactEnabled: !settings?.autoCompactEnabled
+                      });
+                    }}
+                    className={cn(
+                      "transition-colors",
+                      settings?.autoCompactEnabled ? "text-primary" : "text-muted-foreground"
+                    )}
+                  >
+                    {settings?.autoCompactEnabled ? (
+                      <ToggleRight className="h-8 w-8" />
+                    ) : (
+                      <ToggleLeft className="h-8 w-8" />
+                    )}
+                  </button>
+                </div>
+
+                {settings?.autoCompactEnabled && (
+                  <>
+                    <div className="flex items-center gap-3 px-4">
+                      <label htmlFor="compact-threshold" className="text-sm font-medium">
+                        Usage threshold:
+                      </label>
+                      <input
+                        id="compact-threshold"
+                        type="range"
+                        min="50"
+                        max="100"
+                        step="5"
+                        value={settings?.autoCompactThreshold || 95}
+                        onChange={(e) => {
+                          updateSettingsMutation.mutate({
+                            autoCompactThreshold: parseInt(e.target.value, 10)
+                          });
+                        }}
+                        className="flex-1"
+                      />
+                      <span className="text-sm font-mono w-12 text-right">
+                        {settings?.autoCompactThreshold || 95}%
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground px-4 -mt-2">
+                      Compacts when {settings?.autoCompactThreshold || 95}% of context is used ({100 - (settings?.autoCompactThreshold || 95)}% remaining)
+                    </p>
+                  </>
+                )}
+              </div>
+            </section>
           </TabsContent>
 
           {/* Appearance Tab */}

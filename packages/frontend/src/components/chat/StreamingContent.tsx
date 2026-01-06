@@ -447,13 +447,7 @@ function ClaudeResponse({ message }: { message: string }) {
 
 export function StreamingContent({ content, onResponse }: StreamingContentProps) {
   const parsed = useMemo(() => {
-    const clean = stripAnsi(content);
-    const result = parseClaudeOutput(content);
-    console.log('StreamingContent parsed:', result.type);
-    console.log('Clean content:', clean);
-    console.log('Has bullet:', /[●○◉◎]/.test(clean));
-    console.log('Has Hatching:', clean.includes('Hatching'));
-    return result;
+    return parseClaudeOutput(content);
   }, [content]);
 
   if (parsed.type === 'welcome' && parsed.welcomeData) {

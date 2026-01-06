@@ -1,4 +1,4 @@
-import type { Message, StreamingMessage } from './message';
+import type { Message, StreamingMessage, CompactMetadata } from './message';
 import type { SessionStatus } from './session';
 
 // Session permission mode
@@ -15,7 +15,7 @@ export interface ImageAttachmentData {
 
 // Buffered message for reconnection replay
 export interface BufferedMessage {
-  type: 'output' | 'message' | 'thinking' | 'tool_use' | 'usage' | 'todos' | 'agent' | 'image' | 'status';
+  type: 'output' | 'message' | 'thinking' | 'tool_use' | 'usage' | 'todos' | 'agent' | 'image' | 'status' | 'command_output' | 'compacting' | 'compact_boundary';
   data: unknown;
   timestamp: number;
 }
@@ -39,6 +39,7 @@ export interface ClientToServerEvents {
   'session:unsubscribe': (sessionId: string) => void;
   'session:interrupt': (sessionId: string) => void;
   'session:restart': (sessionId: string) => void;
+  'session:resume': (sessionId: string) => void;
   'session:reconnect': (data: {
     sessionId: string;
     lastTimestamp?: number;
@@ -82,6 +83,7 @@ export interface UsageData {
   // Context window
   contextWindow: number;
   contextUsedPercent: number;
+  contextRemainingPercent: number;
   // Cost
   totalCostUsd: number;
   // Model info
@@ -114,6 +116,14 @@ export interface PendingPermission {
   toolInput: unknown;
   description: string;
   suggestedPattern: string;
+}
+
+// Pending plan approval request
+export interface PendingPlanApproval {
+  sessionId: string;
+  requestId: string;
+  planContent?: string;  // The markdown content of the plan
+  planPath?: string;     // Path to the plan file
 }
 
 // User question option for AskUserQuestion tool
@@ -188,7 +198,14 @@ export interface ServerToClientEvents {
   'session:permission_resolved': (data: { sessionId: string; requestId: string }) => void;
   'session:question_request': (data: PendingUserQuestion) => void;
   'session:question_resolved': (data: { sessionId: string; requestId: string }) => void;
+  'session:plan_approval_request': (data: PendingPlanApproval) => void;
+  'session:plan_approval_resolved': (data: { sessionId: string; requestId: string }) => void;
+  'session:compacting': (data: { sessionId: string; isCompacting: boolean }) => void;
+  'session:compact_boundary': (data: { sessionId: string; metadata: CompactMetadata }) => void;
+  'session:command_output': (data: { sessionId: string; output: string }) => void;
   'heartbeat': (data: { sessionId: string; status: 'ok' | 'not_found' }) => void;
+  'debug:claude:message': (data: { sessionId: string; message: any }) => void;
+  'debug:claude:sent': (data: { sessionId: string; message: any }) => void;
   error: (message: string) => void;
 }
 

@@ -137,6 +137,16 @@
   .claude-focus {
     @apply outline-none ring-2 ring-primary/40 ring-offset-2 ring-offset-background;
   }
+
+  /* Hide scrollbar but keep functionality */
+  .scrollbar-hide {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;     /* Firefox */
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;             /* Chrome, Safari and Opera */
+  }
 }
 
 /* Claude-inspired scrollbar - subtle and warm */
@@ -406,4 +416,43 @@
 .prose pre code {
   word-break: normal;
   white-space: pre;
+}
+
+/* Custom prose styling for better list rendering */
+.prose ol,
+.prose ul {
+  @apply my-4 space-y-2;
+}
+
+.prose li {
+  @apply my-1;
+}
+
+.prose ol > li {
+  @apply pl-2;
+}
+
+.prose ul > li {
+  @apply pl-2;
+}
+
+/* Ensure strong/bold text renders properly in lists */
+.prose strong,
+.prose b {
+  @apply font-bold text-foreground;
+}
+
+/* Better nested list spacing */
+.prose li > ol,
+.prose li > ul {
+  @apply mt-2 mb-2;
+}
+
+/* Improve list markers visibility */
+.prose ol > li::marker {
+  @apply text-foreground font-medium;
+}
+
+.prose ul > li::marker {
+  @apply text-foreground;
 }

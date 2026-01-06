@@ -70,7 +70,8 @@ router.get('/', requireAuth, asyncHandler(async (_req, res) => {
           await fs.access(decodedPath);
           hasSession = true;
         } catch {
-          // Project directory no longer exists
+          // Project directory no longer exists - skip it
+          continue;
         }
 
         discoveredProjects.push({

@@ -1,10 +1,11 @@
 import { useState, useCallback } from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, Settings, Plus, FolderOpen, LogOut, User, Star, ListTodo, GitBranch } from 'lucide-react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { LayoutDashboard, MessageSquare, Settings, Plus, FolderOpen, LogOut, User, Star, ListTodo, GitBranch, Bug, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
+import { useToast } from '@/hooks/use-toast';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,7 +18,7 @@ const navItems = [
   { icon: LayoutDashboard, label: 'Dashboard', path: '/' },
 ];
 
-export type RightPanelTab = 'files' | 'todos' | 'git' | null;
+export type RightPanelTab = 'files' | 'todos' | 'git' | 'debug' | null;
 
 interface SidebarProps {
   onNavigate?: () => void;
@@ -29,8 +30,10 @@ interface SidebarProps {
 
 export function Sidebar({ onNavigate, mobile, rightPanelTab, onRightPanelTabChange, pendingTaskCount = 0 }: SidebarProps) {
   const location = useLocation();
-  const { sessions } = useSessionStore();
+  const navigate = useNavigate();
+  const { sessions, removeSession } = useSessionStore();
   const { user, logout } = useAuthStore();
+  const { toast } = useToast();
 
   // Sidebar collapsed state with localStorage persistence
   const [collapsed, setCollapsedState] = useState(() => {
@@ -57,6 +60,39 @@ export function Sidebar({ onNavigate, mobile, rightPanelTab, onRightPanelTabChan
   const handleLinkClick = () => {
     if (onNavigate) {
       onNavigate();
+    }
+  };
+
+  const handleDeleteSession = async (sessionId: string, sessionName: string) => {
+    try {
+      const response = await fetch(`/api/sessions/${sessionId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to delete session');
+      }
+
+      removeSession(sessionId);
+      toast({
+        title: "Session deleted",
+        description: `"${sessionName}" has been removed`,
+      });
+
+      // If we're viewing the deleted session, navigate to dashboard
+      if (location.pathname === `/session/${sessionId}`) {
+        navigate('/');
+      }
+    } catch (error) {
+      console.error('Error deleting session:', error);
+      toast({
+        title: "Error",
+        description: "Failed to delete session",
+        variant: "destructive",
+      });
     }
   };
 
@@ -202,43 +238,63 @@ export function Sidebar({ onNavigate, mobile, rightPanelTab, onRightPanelTabChan
                 const isActive = location.pathname === `/session/${session.id}`;
 
                 return (
-                  <Link
+                  <div
                     key={session.id}
-                    to={`/session/${session.id}`}
-                    onClick={handleLinkClick}
-                    title={isCollapsed ? session.name : undefined}
                     className={cn(
-                      'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-200',
+                      'group relative flex items-center gap-3 rounded-xl text-sm transition-all duration-200',
                       isActive
                         ? 'bg-primary/10 text-foreground'
                         : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-                      isCollapsed && 'justify-center px-2'
+                      isCollapsed && 'justify-center'
                     )}
                   >
-                    <div className="relative shrink-0">
-                      <MessageSquare className="h-4 w-4" />
-                      <div
-                        className={cn(
-                          'absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full border-2 border-card',
-                          session.status === 'running' && 'bg-green-500',
-                          session.status === 'stopped' && 'bg-gray-400',
-                          session.status === 'error' && 'bg-red-500'
-                        )}
-                      />
-                    </div>
-                    {!isCollapsed && (
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5 truncate font-medium text-sm">
-                          {session.starred && <Star className="h-3 w-3 text-amber-500 fill-amber-500 shrink-0" />}
-                          <span className="truncate">{session.name}</span>
-                        </div>
-                        <div className="flex items-center gap-1 text-[10px] opacity-60">
-                          <FolderOpen className="h-2.5 w-2.5" />
-                          <span className="truncate">{session.workingDirectory.split('/').pop()}</span>
-                        </div>
+                    <Link
+                      to={`/session/${session.id}`}
+                      onClick={handleLinkClick}
+                      title={isCollapsed ? session.name : undefined}
+                      className="flex items-center gap-3 px-3 py-2.5 flex-1"
+                    >
+                      <div className="relative shrink-0">
+                        <MessageSquare className="h-4 w-4" />
+                        <div
+                          className={cn(
+                            'absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full border-2 border-card',
+                            session.status === 'running' && 'bg-green-500',
+                            session.status === 'stopped' && 'bg-gray-400',
+                            session.status === 'error' && 'bg-red-500'
+                          )}
+                        />
                       </div>
+                      {!isCollapsed && (
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 truncate font-medium text-sm">
+                            {session.starred && <Star className="h-3 w-3 text-amber-500 fill-amber-500 shrink-0" />}
+                            <span className="truncate">{session.name}</span>
+                          </div>
+                          <div className="flex items-center gap-1 text-[10px] opacity-60">
+                            <FolderOpen className="h-2.5 w-2.5" />
+                            <span className="truncate">{session.workingDirectory.split('/').pop()}</span>
+                          </div>
+                        </div>
+                      )}
+                    </Link>
+                    {!isCollapsed && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity mr-1"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (confirm(`Delete session "${session.name}"?\n\nThis action cannot be undone.`)) {
+                            handleDeleteSession(session.id, session.name);
+                          }
+                        }}
+                      >
+                        <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                      </Button>
                     )}
-                  </Link>
+                  </div>
                 );
               })
             )}
@@ -305,6 +361,18 @@ export function Sidebar({ onNavigate, mobile, rightPanelTab, onRightPanelTabChan
             title="Git"
           >
             <GitBranch className="h-4 w-4" />
+          </Button>
+          <Button
+            variant={rightPanelTab === 'debug' ? 'secondary' : 'ghost'}
+            size="icon"
+            className={cn(
+              "h-8 w-8 shrink-0",
+              rightPanelTab === 'debug' && "bg-primary/10 text-primary"
+            )}
+            onClick={() => onRightPanelTabChange(rightPanelTab === 'debug' ? null : 'debug')}
+            title="Debug"
+          >
+            <Bug className="h-4 w-4" />
           </Button>
         </div>
       )}

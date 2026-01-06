@@ -12,6 +12,8 @@ const updateSettingsSchema = z.object({
   defaultWorkingDir: z.string().nullable().optional(),
   allowedTools: z.array(z.string()).optional(),
   customSystemPrompt: z.string().nullable().optional(),
+  autoCompactEnabled: z.boolean().optional(),
+  autoCompactThreshold: z.number().min(0).max(100).optional(),
 });
 
 // Get user settings
@@ -22,16 +24,17 @@ router.get('/', requireAuth, (req, res) => {
   let settings = db
     .prepare(
       `SELECT user_id as userId, theme, default_working_dir as defaultWorkingDir,
-              allowed_tools as allowedTools, custom_system_prompt as customSystemPrompt
+              allowed_tools as allowedTools, custom_system_prompt as customSystemPrompt,
+              auto_compact_enabled as autoCompactEnabled, auto_compact_threshold as autoCompactThreshold
        FROM user_settings WHERE user_id = ?`
     )
-    .get(userId) as { userId: string; theme: Theme; defaultWorkingDir: string | null; allowedTools: string; customSystemPrompt: string | null } | undefined;
+    .get(userId) as { userId: string; theme: Theme; defaultWorkingDir: string | null; allowedTools: string; customSystemPrompt: string | null; autoCompactEnabled: number; autoCompactThreshold: number } | undefined;
 
   if (!settings) {
     // Create default settings
     db.prepare(
-      `INSERT INTO user_settings (user_id, theme, allowed_tools)
-       VALUES (?, 'dark', '["Bash","Read","Write","Edit","Glob","Grep"]')`
+      `INSERT INTO user_settings (user_id, theme, allowed_tools, auto_compact_enabled, auto_compact_threshold)
+       VALUES (?, 'dark', '["Bash","Read","Write","Edit","Glob","Grep"]', 1, 95)`
     ).run(userId);
 
     settings = {
@@ -40,6 +43,8 @@ router.get('/', requireAuth, (req, res) => {
       defaultWorkingDir: null,
       allowedTools: '["Bash","Read","Write","Edit","Glob","Grep"]',
       customSystemPrompt: null,
+      autoCompactEnabled: 1,
+      autoCompactThreshold: 95,
     };
   }
 
@@ -49,6 +54,8 @@ router.get('/', requireAuth, (req, res) => {
     defaultWorkingDir: settings.defaultWorkingDir,
     allowedTools: JSON.parse(settings.allowedTools || '[]'),
     customSystemPrompt: settings.customSystemPrompt,
+    autoCompactEnabled: !!settings.autoCompactEnabled,
+    autoCompactThreshold: settings.autoCompactThreshold,
   };
 
   res.json({ success: true, data: userSettings });
@@ -64,7 +71,7 @@ router.put('/', requireAuth, (req, res) => {
   }
 
   const db = getDatabase();
-  const { theme, defaultWorkingDir, allowedTools, customSystemPrompt } = parsed.data;
+  const { theme, defaultWorkingDir, allowedTools, customSystemPrompt, autoCompactEnabled, autoCompactThreshold } = parsed.data;
 
   const updates: string[] = [];
   const values: unknown[] = [];
@@ -85,6 +92,14 @@ router.put('/', requireAuth, (req, res) => {
     updates.push('custom_system_prompt = ?');
     values.push(customSystemPrompt);
   }
+  if (autoCompactEnabled !== undefined) {
+    updates.push('auto_compact_enabled = ?');
+    values.push(autoCompactEnabled ? 1 : 0);
+  }
+  if (autoCompactThreshold !== undefined) {
+    updates.push('auto_compact_threshold = ?');
+    values.push(autoCompactThreshold);
+  }
 
   if (updates.length > 0) {
     values.push(userId);
@@ -95,10 +110,11 @@ router.put('/', requireAuth, (req, res) => {
   const settings = db
     .prepare(
       `SELECT user_id as userId, theme, default_working_dir as defaultWorkingDir,
-              allowed_tools as allowedTools, custom_system_prompt as customSystemPrompt
+              allowed_tools as allowedTools, custom_system_prompt as customSystemPrompt,
+              auto_compact_enabled as autoCompactEnabled, auto_compact_threshold as autoCompactThreshold
        FROM user_settings WHERE user_id = ?`
     )
-    .get(userId) as { userId: string; theme: Theme; defaultWorkingDir: string | null; allowedTools: string; customSystemPrompt: string | null };
+    .get(userId) as { userId: string; theme: Theme; defaultWorkingDir: string | null; allowedTools: string; customSystemPrompt: string | null; autoCompactEnabled: number; autoCompactThreshold: number };
 
   const userSettings: UserSettings = {
     userId: settings.userId,
@@ -106,6 +122,8 @@ router.put('/', requireAuth, (req, res) => {
     defaultWorkingDir: settings.defaultWorkingDir,
     allowedTools: JSON.parse(settings.allowedTools || '[]'),
     customSystemPrompt: settings.customSystemPrompt,
+    autoCompactEnabled: !!settings.autoCompactEnabled,
+    autoCompactThreshold: settings.autoCompactThreshold,
   };
 
   res.json({ success: true, data: userSettings });

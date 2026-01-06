@@ -18,6 +18,7 @@ interface PendingPermission {
   suggestedPattern: string;
   status: 'pending' | 'approved' | 'denied';
   pattern?: string;
+  denialReason?: string;
   createdAt: number;
 }
 
@@ -56,6 +57,7 @@ const permissionRespondSchema = z.object({
   requestId: z.string().uuid(),
   action: z.enum(['allow_once', 'allow_project', 'allow_global', 'deny']),
   pattern: z.string().optional(),
+  reason: z.string().optional(),
 });
 
 /**
@@ -143,10 +145,16 @@ router.get('/response/:requestId', async (req: Request, res: Response) => {
 
       console.log(`[PERMISSIONS] Request ${requestId} resolved: ${request.status}, approved=${approved}`);
 
-      const response = {
+      const response: any = {
         approved,
         pattern,
       };
+
+      // Include denial reason if available
+      if (!approved && request.denialReason) {
+        response.error = request.denialReason;
+      }
+
       console.log(`[PERMISSIONS] Returning response: ${JSON.stringify(response)}`);
       return res.json(response);
     }
@@ -178,7 +186,7 @@ router.post('/respond', requireAuth, async (req: Request, res: Response) => {
     throw new AppError('Invalid request data', 400, 'VALIDATION_ERROR');
   }
 
-  const { requestId, action, pattern } = parsed.data;
+  const { requestId, action, pattern, reason } = parsed.data;
 
   const request = pendingRequests.get(requestId);
 
@@ -189,6 +197,9 @@ router.post('/respond', requireAuth, async (req: Request, res: Response) => {
   // Update request status
   if (action === 'deny') {
     request.status = 'denied';
+    if (reason) {
+      request.denialReason = reason;
+    }
   } else {
     request.status = 'approved';
     request.pattern = pattern || request.suggestedPattern;
@@ -261,5 +272,44 @@ router.get('/pending/:sessionId', requireAuth, (req: Request, res: Response) => 
     data: pending,
   });
 });
+
+// Export helper function for internal use
+export function getPendingPermissionsForSession(sessionId: string): PendingPermission[] {
+  const pending: PendingPermission[] = [];
+  for (const request of pendingRequests.values()) {
+    if (request.sessionId === sessionId && request.status === 'pending') {
+      pending.push(request);
+    }
+  }
+  return pending;
+}
+
+// Clear all pending permissions for a session (used when process is terminated)
+export function clearPendingPermissionsForSession(sessionId: string): void {
+  const cleared: string[] = [];
+  for (const [requestId, request] of pendingRequests.entries()) {
+    if (request.sessionId === sessionId) {
+      pendingRequests.delete(requestId);
+      cleared.push(requestId);
+    }
+  }
+  if (cleared.length > 0) {
+    console.log(`[PERMISSIONS] Cleared ${cleared.length} pending permissions for session ${sessionId}`);
+  }
+}
+
+// Deny all pending permissions for a session (used for /clear and interrupt)
+export function denyPendingPermissionsForSession(sessionId: string): void {
+  const denied: string[] = [];
+  for (const [requestId, request] of pendingRequests.entries()) {
+    if (request.sessionId === sessionId && request.status === 'pending') {
+      request.status = 'denied';
+      denied.push(requestId);
+    }
+  }
+  if (denied.length > 0) {
+    console.log(`[PERMISSIONS] Denied ${denied.length} pending permissions for session ${sessionId}`);
+  }
+}
 
 export default router;

@@ -1,3 +1,4 @@
+<!-- Plan approval system enhanced: v2.0 - with content display -->
 # Claude Code WebUI
 
 A powerful web-based interface for Claude Code CLI with rich features for development workflows.
@@ -187,11 +188,41 @@ docker-compose up -d --build
 
 ### Claude CLI Integration
 
-The backend communicates with Claude CLI in `stream-json` mode:
+The backend communicates with Claude CLI in `stream-json` mode with enhanced WebUI integration through hooks and MCP.
+
+#### Architecture Overview
+
+```
+WebUI Frontend
+    ↓ WebSocket/REST
+Backend Server
+    ├── Claude Process Manager
+    │   ├── Spawns Claude CLI with hooks
+    │   └── MCP Server (webui-server.ts)
+    └── PreToolUse Hooks
+        ├── ban-ask-user-question-hook
+        ├── redirect-exit-plan-mode-hook
+        └── (intercept and redirect tools)
+```
+
+#### Hook System
+
+The WebUI implements several workarounds for Claude CLI limitations:
+
+1. **AskUserQuestion → MCP ask_user**: Redirects terminal prompts to web UI
+2. **Permission Prompts → MCP permission_prompt**: Visual permission dialogs
+3. **ExitPlanMode → MCP confirm_plan**: Two-step approval avoiding timeouts
+
+See [Claude CLI Workarounds Documentation](docs/CLAUDE_CLI_WORKAROUNDS.md) for detailed information.
+
+#### CLI Launch Command
 
 ```bash
 claude --print --verbose --output-format stream-json --input-format stream-json \
-       --include-partial-messages --dangerously-skip-permissions
+       --include-partial-messages --dangerously-skip-permissions \
+       --hook-config /path/to/hooks.json \
+       --permission-prompt-tool=mcp__webui__permission_prompt \
+       --mcp "npx tsx webui-server.ts"
 ```
 
 ## Project Structure

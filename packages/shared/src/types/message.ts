@@ -1,8 +1,16 @@
-export type MessageRole = 'user' | 'assistant' | 'system';
+export type MessageRole = 'user' | 'assistant' | 'system' | 'meta';
 
 export interface MessageImage {
   path: string;
   filename: string;
+}
+
+export interface CompactMetadata {
+  startContext: number;
+  endContext: number;
+  duration?: number;
+  trigger?: string;
+  pre_tokens?: number;
 }
 
 export interface Message {
@@ -12,6 +20,11 @@ export interface Message {
   content: string;
   createdAt: string;
   images?: MessageImage[];
+  // Meta message fields
+  metaType?: 'compact' | 'resume' | 'restart' | 'command_output' | 'system';
+  metaData?: CompactMetadata | { time?: string } | { output: string } | { subtype?: string };
+  // Pending state for user messages that haven't been acknowledged by Claude
+  isPending?: boolean;
 }
 
 export interface ToolUse {

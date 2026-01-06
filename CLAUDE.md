@@ -1,91 +1,60 @@
 # Claude Code Web UI
 
-Web-basierte Benutzeroberfläche für Claude Code CLI.
+## Project Behavior Guidelines
 
-## Projektstruktur
+### Code Style
+- Use TypeScript strictly - no `any` types
+- Prefer functional components with hooks
+- Keep components focused and composable
+- Use Tailwind classes, avoid inline styles
+- Follow existing patterns in codebase
 
-pnpm-Monorepo mit drei Packages:
+### Development Practices
+- Always run `pnpm typecheck` before considering done
+- Test changes with `pnpm dev` running
+- Preserve existing functionality when refactoring
+- Keep commits focused on single concerns
+- Use descriptive variable/function names
 
-```
-packages/
-  backend/   - Express + Socket.IO Server, SQLite DB, node-pty für Claude CLI
-  frontend/  - React 18 + Vite, Radix UI, Tailwind, Zustand
-  shared/    - Gemeinsame TypeScript-Typen
-```
+### Architecture Decisions
+- WebSocket for real-time updates, REST for CRUD
+- Zustand for global state, React state for local
+- SQLite for persistence, no external DB needed
+- Stream JSON mode for Claude CLI communication
 
-## Entwicklung
+### Common Tasks
+- Adding features: Check existing patterns first
+- Debugging: Use browser DevTools + backend logs
+- Performance: Profile before optimizing
+- UI changes: Test on mobile viewport too
 
+## Documentation Links
+- [Radix UI Primitives](https://www.radix-ui.com/primitives)
+- [Tailwind CSS](https://tailwindcss.com/docs)
+- [Socket.IO](https://socket.io/docs/v4/)
+- [Zustand](https://docs.pmnd.rs/zustand/getting-started/introduction)
+- [Vite](https://vitejs.dev/guide/)
+
+## Quick Reference
 ```bash
-# Abhängigkeiten installieren
-pnpm install
+pnpm dev          # Start development
+pnpm typecheck    # Check types
+pnpm build        # Production build
 
-# Dev-Server starten (Backend + Frontend parallel)
-pnpm dev
-
-# Oder mit dem Helper-Skript (generiert temporäre Secrets)
-./scripts/start-webui.sh
+# Restart backend (when using scripts/start-webui.sh)
+scripts/start-webui.sh --restart  # From another terminal
+# OR
+kill -USR1 <script-pid>           # Using the PID shown at startup
 ```
 
-Backend: http://localhost:3006
-Frontend: http://localhost:5173
+### Backend Restart
+When running with `scripts/start-webui.sh`, you can restart just the backend server without affecting the frontend. This is useful when:
+- Making backend code changes that need a reload
+- Backend crashes and needs recovery
+- Clearing in-memory state while keeping UI sessions intact
 
-## Wichtige Dateien
+Two ways to restart:
+1. **From another terminal**: `scripts/start-webui.sh --restart`
+2. **Using signal**: `kill -USR1 <pid>` (PID is shown at startup)
 
-- `packages/backend/src/services/claude/` - Claude CLI Prozess-Management (stream-json Modus)
-- `packages/backend/src/websocket/` - Socket.IO Event-Handler
-- `packages/backend/src/routes/` - REST API Endpunkte
-- `packages/frontend/src/pages/SessionPage.tsx` - Haupt-Chat-Interface
-- `packages/frontend/src/services/socket.ts` - WebSocket-Client
-
-## Claude CLI Integration
-
-Das Backend kommuniziert mit Claude CLI im `stream-json` Modus:
-
-```bash
-claude --print --verbose --output-format stream-json --input-format stream-json \
-       --include-partial-messages --dangerously-skip-permissions
-```
-
-Features:
-- **Live-Streaming**: Nachrichten werden in Echtzeit gestreamt (`content_block_delta` Events)
-- **Message-Queue**: Nachrichten werden auch während Claudes Arbeit akzeptiert
-- **Interrupt**: Ctrl+C Funktionalität via SIGINT
-
-WebSocket Events (Server → Client):
-- `session:output` - Streaming-Text (Delta)
-- `session:message` - Gespeicherte Nachricht
-- `session:thinking` - Denkindikator (isThinking: boolean)
-- `session:tool_use` - Tool-Nutzung (started/completed/error)
-- `session:status` - Session-Status
-
-## Bildgenerierung mit Gemini
-
-Claude Code kann Bilder mit dem Gemini API (Nano Banana Pro / gemini-3-pro-image-preview) generieren:
-
-```bash
-# Generiere ein Bild und sende es an den Chat
-npx tsx packages/backend/src/cli/generate-image.ts "Ein Sonnenuntergang über Bergen"
-```
-
-Die Session-ID wird automatisch aus der Umgebungsvariable `WEBUI_SESSION_ID` gelesen.
-Das generierte Bild wird automatisch im Chat-Interface angezeigt.
-
-## Umgebungsvariablen
-
-| Variable | Beschreibung |
-|----------|--------------|
-| `SESSION_SECRET` | Express Session Secret |
-| `JWT_SECRET` | JWT Signierung |
-| `FRONTEND_URL` | CORS Origin (default: http://localhost:5173) |
-| `GEMINI_API_KEY` | Google Gemini API Key für Bildgenerierung |
-| `WEBUI_SESSION_ID` | Aktuelle Session-ID (automatisch gesetzt) |
-
-## Befehle
-
-```bash
-pnpm dev          # Entwicklungsserver
-pnpm build        # Produktions-Build
-pnpm typecheck    # TypeScript-Prüfung
-pnpm lint         # ESLint
-pnpm format       # Prettier
-```
+The frontend remains running, preserving user sessions and UI state. The script writes its own PID to `.pids/start-webui.pid` for easy access.

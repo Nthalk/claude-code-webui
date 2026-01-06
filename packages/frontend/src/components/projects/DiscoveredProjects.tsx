@@ -10,7 +10,6 @@ import {
   Plus,
   FileJson,
   Clock,
-  AlertCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -138,27 +137,13 @@ export function DiscoveredProjects() {
             {projects.map((project) => (
               <div
                 key={project.id}
-                className={cn(
-                  'rounded-lg border p-3 transition-colors',
-                  project.hasSession
-                    ? 'hover:border-primary cursor-pointer'
-                    : 'opacity-60 border-dashed'
-                )}
+                className="rounded-lg border p-3 transition-colors hover:border-primary cursor-pointer"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                      <FolderOpen className={cn(
-                        'h-4 w-4 shrink-0',
-                        project.hasSession ? 'text-amber-500' : 'text-muted-foreground'
-                      )} />
+                      <FolderOpen className="h-4 w-4 shrink-0 text-amber-500" />
                       <span className="font-medium truncate">{project.name}</span>
-                      {!project.hasSession && (
-                        <span className="flex items-center gap-1 text-xs text-amber-600 bg-amber-500/10 px-1.5 py-0.5 rounded">
-                          <AlertCircle className="h-3 w-3" />
-                          Missing
-                        </span>
-                      )}
                     </div>
                     <p className="text-xs text-muted-foreground truncate mb-2">
                       {project.path}
@@ -203,8 +188,8 @@ export function DiscoveredProjects() {
                   {/* Action button */}
                   <Button
                     size="sm"
-                    variant={project.hasSession ? 'default' : 'outline'}
-                    disabled={!project.hasSession || createMutation.isPending}
+                    variant="default"
+                    disabled={createMutation.isPending}
                     onClick={(e) => {
                       e.stopPropagation();
                       createMutation.mutate(project);

@@ -3,6 +3,7 @@ import type {
     BufferedMessage,
     ClientToServerEvents,
     InterServerEvents,
+    ModelType,
     ServerToClientEvents,
     SessionMode,
     SocketData,
@@ -15,7 +16,7 @@ import path from 'path';
 import {fileURLToPath} from 'url';
 import {ChildProcess, spawn as cpSpawn} from 'child_process';
 import {config} from '../../config';
-import type { ModelType } from '@claude-code-webui/shared';
+import {getHookJson} from './hooks';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -159,6 +160,25 @@ interface ClaudeProcess {
     outputBuffer: CircularBuffer<BufferedMessage>;
     lastActivityAt: number;
     disconnectedAt: number | null;
+    // Auto-compacting state
+    isCompacting: boolean;
+    hasAutoCompacted: boolean;
+    compactStartTime?: number;
+    compactStartContext?: number;
+    // Compaction buffering
+    compactionBuffer: any[];
+    waitingForContextUpdate: boolean;
+    isDetectingCompaction: boolean;
+    // Context threshold management
+    isCheckingContext: boolean;
+    outgoingMessageQueue: Array<{
+        message: string;
+        images?: ImageData[];
+        suppressSaving?: boolean;
+    }>;
+    contextCheckThreshold: number; // Percentage at which to start checking
+    // Context relay counter - increment when user runs /context
+    relayContextMessage: number;
 }
 
 const MODEL_IDS: Record<ModelType, string> = {
@@ -184,26 +204,6 @@ export class ClaudeProcessManager {
         }, 60 * 1000);
     }
 
-    // Get the path to the path transform hook script
-    // TODO: Re-enable when path transform hook is needed
-    // private getPathTransformHookPath(): string {
-    //   // In dev (tsx): __dirname = packages/backend/src/services/claude
-    //   // Hook is at: packages/backend/src/cli/path-transform-hook.ts
-    //
-    //   const devPath = path.resolve(__dirname, '../../cli/path-transform-hook.ts');
-    //   if (fsSync.existsSync(devPath)) {
-    //     return devPath;
-    //   }
-    //
-    //   // If running from dist, the script is in src (parallel to dist)
-    //   const prodPath = path.resolve(__dirname, '../../../src/cli/path-transform-hook.ts');
-    //   if (fsSync.existsSync(prodPath)) {
-    //     return prodPath;
-    //   }
-    //
-    //   console.warn(`[HOOKS] Could not find path-transform-hook.ts, tried: ${devPath}, ${prodPath}`);
-    //   return devPath;
-    // }
 
     // Get the path to the WebUI MCP server script
     private getMcpServerScriptPath(): string {
@@ -235,31 +235,6 @@ export class ClaudeProcessManager {
         return devPath;
     }
 
-    // Generate settings JSON with hooks configured
-    // TODO: Re-enable when path transform hook is needed
-    // private getHookSettings(): string {
-    //   const hookScriptPath = this.getPathTransformHookPath();
-    //   console.log(`[HOOKS] Using path transform hook: ${hookScriptPath}`);
-    //
-    //   // PreToolUse hook to transform absolute paths to relative paths
-    //   const settings = {
-    //     hooks: {
-    //       PreToolUse: [
-    //         {
-    //           matcher: 'Read|Write|Edit|Glob|Grep|NotebookEdit',
-    //           hooks: [
-    //             {
-    //               type: 'command',
-    //               command: `npx tsx ${hookScriptPath}`,
-    //             },
-    //           ],
-    //         },
-    //       ],
-    //     },
-    //   };
-    //
-    //   return JSON.stringify(settings);
-    // }
 
     // Generate MCP config JSON string for --mcp-config flag
     private getMcpConfigJson(sessionId: string, workingDirectory: string, mode: SessionMode): string {
@@ -321,6 +296,14 @@ export class ClaudeProcessManager {
         return this.processes.has(sessionId);
     }
 
+    // Get current usage for a session
+    getCurrentUsage(sessionId: string): void {
+        const proc = this.processes.get(sessionId);
+        if (proc) {
+            this.emitUsage(sessionId, proc);
+        }
+    }
+
     // Mark session as disconnected (client disconnected but process keeps running)
     markSessionDisconnected(sessionId: string): void {
         const proc = this.processes.get(sessionId);
@@ -368,7 +351,11 @@ export class ClaudeProcessManager {
 
         const session = db
             .prepare('SELECT * FROM sessions WHERE id = ? AND user_id = ?')
-            .get(sessionId, userId) as { working_directory: string; claude_session_id: string | null; model?: string } | undefined;
+            .get(sessionId, userId) as {
+            working_directory: string;
+            claude_session_id: string | null;
+            model?: string
+        } | undefined;
 
         if (!session) {
             throw new Error('Session not found');
@@ -383,8 +370,8 @@ export class ClaudeProcessManager {
         this.pendingModes.delete(sessionId); // Clear pending mode once used
         console.log(`[MODE] Starting session ${sessionId} with mode ${effectiveMode}`);
 
-        // Use provided model, or pending model, or session's stored model, or default to 'sonnet'
-        const effectiveModel: ModelType = model ?? this.pendingModels.get(sessionId) ?? (session.model as ModelType) ?? 'sonnet';
+        // Use provided model, or pending model, or session's stored model, or default to 'opus'
+        const effectiveModel: ModelType = model ?? this.pendingModels.get(sessionId) ?? (session.model as ModelType) ?? 'opus';
         this.pendingModels.delete(sessionId); // Clear pending model once used
         const modelId = MODEL_IDS[effectiveModel];
         console.log(`[MODEL] Starting session ${sessionId} with model ${effectiveModel} (${modelId})`);
@@ -408,9 +395,9 @@ export class ClaudeProcessManager {
         // The MCP server will auto-approve in 'danger' mode
         args.push('--permission-prompt-tool', 'mcp__webui__permission_prompt');
 
-        // TODO: Path transform hook disabled for testing - may conflict with permission prompts
-        // const hookSettings = this.getHookSettings();
-        // args.push('--settings', hookSettings);
+        // Configure hooks for path transform and ban AskUserQuestion
+        const hookSettings = getHookJson();
+        args.push('--settings', hookSettings);
 
         const isResuming = !!session.claude_session_id;
         if (isResuming && session.claude_session_id) {
@@ -475,12 +462,26 @@ export class ClaudeProcessManager {
             outputBuffer: new CircularBuffer<BufferedMessage>(BUFFER_SIZE),
             lastActivityAt: Date.now(),
             disconnectedAt: null,
+            // Auto-compacting state
+            isCompacting: false,
+            hasAutoCompacted: false,
+            // Compaction buffering
+            compactionBuffer: [],
+            waitingForContextUpdate: false,
+            isDetectingCompaction: false,
+            // Context threshold management
+            isCheckingContext: false,
+            outgoingMessageQueue: [],
+            contextCheckThreshold: 80, // Start checking at 80% usage
+            // Context relay counter
+            relayContextMessage: 0,
         };
 
         this.processes.set(sessionId, claudeProcess);
 
-        db.prepare('UPDATE sessions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
+        db.prepare('UPDATE sessions SET status = ?, session_state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
             'running',
+            'active',
             sessionId
         );
 
@@ -539,11 +540,17 @@ export class ClaudeProcessManager {
     }
 
     private emitUsage(sessionId: string, proc: ClaudeProcess): void {
-        const totalTokens = proc.totalInputTokens + proc.totalOutputTokens +
-            proc.cacheReadTokens + proc.cacheCreationTokens;
+        // Total input = Input + Cache Create + Cache Read
+        // Total output = Output
+        // Total contextWindowTokens = Total input + Total output
+        const totalInputTokens = proc.totalInputTokens + proc.cacheCreationTokens + proc.cacheReadTokens;
+        const totalTokens = totalInputTokens + proc.totalOutputTokens;
         const contextUsedPercent = Math.round((totalTokens / proc.contextWindow) * 100);
+        // For UI display: show remaining buffer as positive percentage, or negative when over limit
+        // If we're at 138% used, we want to show -38% buffer
+        const contextRemainingPercent = 100 - contextUsedPercent;
 
-        console.log(`[USAGE] Emitting usage for ${sessionId}: model=${proc.model}, tokens=${totalTokens}, context=${contextUsedPercent}%, cost=$${proc.totalCostUsd}`);
+        console.log(`[USAGE] Emitting usage for ${sessionId}: model=${proc.model}, tokens=${totalTokens}, context=${contextRemainingPercent}% remaining, cost=$${proc.totalCostUsd}`);
 
         this.io.to(`session:${sessionId}`).emit('session:usage', {
             sessionId,
@@ -554,9 +561,41 @@ export class ClaudeProcessManager {
             totalTokens,
             contextWindow: proc.contextWindow,
             contextUsedPercent,
+            contextRemainingPercent,
             totalCostUsd: proc.totalCostUsd,
             model: proc.model,
         });
+
+        // Check for auto-compact if not already compacting or already auto-compacted
+        if (!proc.isCompacting && !proc.hasAutoCompacted && contextRemainingPercent < 100) {
+            const db = getDatabase();
+            const settings = db
+                .prepare(
+                    `SELECT auto_compact_enabled as autoCompactEnabled, auto_compact_threshold as autoCompactThreshold
+                     FROM user_settings
+                     WHERE user_id = ?`
+                )
+                .get(proc.userId) as { autoCompactEnabled: number; autoCompactThreshold: number } | undefined;
+
+            if (settings && settings.autoCompactEnabled) {
+                // Convert threshold from "usage" to "remaining" semantics
+                // If threshold is 95% (meaning compact at 95% used), we should compact when 5% remaining
+                const remainingThreshold = 100 - settings.autoCompactThreshold;
+                if (contextRemainingPercent <= remainingThreshold) {
+                    console.log(`[AUTO-COMPACT] Suspected overage for session ${sessionId}: ${contextRemainingPercent}% remaining <= ${remainingThreshold}% threshold (${settings.autoCompactThreshold}% usage threshold)`);
+
+                    // Mark that we've attempted auto-compact (to prevent repeated attempts)
+                    proc.hasAutoCompacted = true;
+
+                    // Start checking context to verify if we actually need to compact
+                    if (!proc.isCheckingContext) {
+                        proc.isCheckingContext = true;
+                        console.log(`[AUTO-COMPACT] Checking context to verify if compaction is needed`);
+                        this.sendMessage(sessionId, proc.userId, '/context', undefined, true);
+                    }
+                }
+            }
+        }
     }
 
     private processStreamMessage(sessionId: string, msg: StreamJsonMessage): void {
@@ -569,6 +608,12 @@ export class ClaudeProcessManager {
         if (msg.type === 'stream_event') {
             console.log(`[MSG] stream_event details:`, JSON.stringify(msg.event).substring(0, 200));
         }
+
+        // Emit debug event for received message
+        this.io.to(`session:${sessionId}`).emit('debug:claude:message', {
+            sessionId,
+            message: msg,
+        });
 
         // Capture session ID and model from init message
         if (msg.type === 'system' && msg.subtype === 'init') {
@@ -586,6 +631,74 @@ export class ClaudeProcessManager {
                 proc.model = rawMsg.model;
             }
         }
+
+        // Handle system status messages
+        if (msg.type === 'system' && msg.subtype === 'status') {
+            const statusMsg = msg as { status?: string };
+            if (statusMsg.status === 'compacting') {
+                console.log(`[COMPACT] Detected compaction starting for session ${sessionId}`);
+                proc.isDetectingCompaction = true;
+                proc.compactionBuffer = [];
+
+                // NOW we know Claude is actually compacting, so set the compacting state
+                proc.isCompacting = true;
+                proc.compactStartTime = Date.now();
+                proc.compactStartContext = proc.totalInputTokens + proc.totalOutputTokens;
+
+                // Save compact start meta message
+                this.saveMetaMessage(sessionId, 'compact', {
+                    startContext: proc.compactStartContext,
+                    endContext: 0, // Will be updated when complete
+                    isActive: true,
+                });
+
+                // Emit compacting status
+                this.io.to(`session:${sessionId}`).emit('session:compacting', {
+                    sessionId,
+                    isCompacting: true,
+                });
+            }
+        }
+
+        // Handle compact boundary
+        if (msg.type === 'system' && msg.subtype === 'compact_boundary') {
+            console.log(`[COMPACT] Detected compact boundary for session ${sessionId}`);
+            proc.isDetectingCompaction = false;
+
+            // Clear buffer (we no longer buffer incoming messages)
+            proc.compactionBuffer = [];
+
+            // Send /context command automatically
+            console.log(`[COMPACT] Sending /context command for session ${sessionId}`);
+            proc.waitingForContextUpdate = true;
+
+            // If we have queued messages, mark that we're checking context
+            if (proc.outgoingMessageQueue.length > 0) {
+                console.log(`[COMPACT] Have ${proc.outgoingMessageQueue.length} queued messages, will check context after compact`);
+                proc.isCheckingContext = true;
+            }
+
+            this.sendMessage(sessionId, proc.userId, '/context', undefined, true);
+
+            // Update compact metadata
+            const compactMsg = msg as { compact_metadata?: { trigger?: string; pre_tokens?: number } };
+            if (compactMsg.compact_metadata) {
+                this.saveMetaMessage(sessionId, 'compact', {
+                    trigger: compactMsg.compact_metadata.trigger,
+                    preTokens: compactMsg.compact_metadata.pre_tokens,
+                    isActive: false,
+                });
+            }
+
+            this.io.to(`session:${sessionId}`).emit('session:compacting', {
+                sessionId,
+                isCompacting: false,
+            });
+        }
+
+        // During compaction, we should still display incoming messages from Claude
+        // Only outgoing messages (from user to Claude) should be buffered when approaching context limit
+        // Remove this incorrect buffering of incoming messages
 
         // Handle stream_event wrapper (contains usage info)
         if (msg.type === 'stream_event' && msg.event) {
@@ -696,12 +809,84 @@ export class ClaudeProcessManager {
                 // Handle text streaming
                 if (delta?.type === 'text_delta' && delta.text) {
                     proc.streamingText += delta.text;
-                    // Emit full accumulated text to avoid out-of-order issues
-                    this.io.to(`session:${sessionId}`).emit('session:output', {
-                        sessionId,
-                        content: proc.streamingText,
-                        isComplete: false,
-                    });
+
+                    // Check if we're receiving /context output
+                    if (proc.streamingText.includes('## Context Usage') &&
+                        proc.streamingText.includes('Model:') &&
+                        proc.streamingText.includes('Tokens:')) {
+
+                        const contextData = this.parseContextOutput(proc.streamingText);
+                        if (contextData) {
+                            console.log(`[CONTEXT] Parsed authoritative usage: ${contextData.tokens} / ${contextData.contextWindow} (${contextData.usedPercent}%)`);
+
+                            // Update process state with authoritative values from /context
+                            if (contextData.model) proc.model = contextData.model;
+                            if (contextData.tokens) {
+                                // The /context output shows total tokens in use, not broken down by type
+                                // Reset all token counters and use the total from /context as input tokens
+                                proc.totalInputTokens = contextData.tokens;
+                                proc.totalOutputTokens = 0;
+                                proc.cacheReadTokens = 0;
+                                proc.cacheCreationTokens = 0;
+                            }
+                            if (contextData.contextWindow) proc.contextWindow = contextData.contextWindow;
+
+                            // Emit usage update with authoritative values
+                            this.emitUsage(sessionId, proc);
+
+                            // If we were checking context for buffered messages
+                            if (proc.isCheckingContext && contextData.usedPercent !== undefined) {
+                                console.log(`[CONTEXT] Got context update: ${contextData.usedPercent}% used`);
+                                proc.isCheckingContext = false;
+
+                                // Check if we need to compact
+                                if (contextData.usedPercent >= 100) {
+                                    console.log(`[CONTEXT] Need to compact - at ${contextData.usedPercent}% usage`);
+
+                                    // NOW we know we need to compact, so set the compacting state
+                                    proc.isCompacting = true;
+                                    proc.compactStartTime = Date.now();
+                                    proc.compactStartContext = proc.totalInputTokens + proc.totalOutputTokens;
+
+                                    // Save compact start meta message
+                                    this.saveMetaMessage(sessionId, 'compact', {
+                                        startContext: proc.compactStartContext,
+                                        endContext: 0, // Will be updated when complete
+                                        isActive: true,
+                                    });
+
+                                    // Emit compacting status
+                                    this.io.to(`session:${sessionId}`).emit('session:compacting', {
+                                        sessionId,
+                                        isCompacting: true,
+                                    });
+
+                                    // Send compact command
+                                    this.sendMessage(sessionId, proc.userId, '/compact', undefined, true);
+                                } else {
+                                    console.log(`[CONTEXT] No compact needed - at ${contextData.usedPercent}% usage`);
+                                    // Process queued messages
+                                    this.processQueuedMessages(sessionId);
+                                }
+                            }
+                        } else if (proc.isCheckingContext) {
+                            // Safety reset: context output detected but parsing failed
+                            console.log(`[CONTEXT] WARNING: Context output detected but parsing failed, resetting isCheckingContext`);
+                            console.log(`[CONTEXT] Raw content: ${proc.streamingText.substring(0, 500)}`);
+                            proc.isCheckingContext = false;
+                            // Process any queued messages to prevent stuck state
+                            this.processQueuedMessages(sessionId);
+                        }
+                    }
+
+                    // Emit full accumulated text to avoid out-of-order issues (unless compacting)
+                    if (!proc.isCompacting) {
+                        this.io.to(`session:${sessionId}`).emit('session:output', {
+                            sessionId,
+                            content: proc.streamingText,
+                            isComplete: false,
+                        });
+                    }
                 }
 
                 // Handle tool input JSON streaming
@@ -861,12 +1046,14 @@ export class ClaudeProcessManager {
         // Handle content_block_delta - stream text in real-time
         if (msg.type === 'content_block_delta' && msg.delta?.text) {
             proc.streamingText += msg.delta.text;
-            // Emit streaming content to frontend
-            this.io.to(`session:${sessionId}`).emit('session:output', {
-                sessionId,
-                content: msg.delta.text,
-                isComplete: false,
-            });
+            // Emit streaming content to frontend (unless compacting)
+            if (!proc.isCompacting) {
+                this.io.to(`session:${sessionId}`).emit('session:output', {
+                    sessionId,
+                    content: msg.delta.text,
+                    isComplete: false,
+                });
+            }
         }
 
         // Handle content_block_stop - save complete message
@@ -946,16 +1133,124 @@ export class ClaudeProcessManager {
                 isThinking: true,
             });
 
-            // Extract tool results from user message content
+            // Extract tool results and command output from user message content
             const userMsg = msg as {
                 message?: {
-                    content?: Array<{
+                    role?: string;
+                    content?: string | Array<{
                         type: string;
                         tool_use_id?: string;
                         content?: string | Array<{ type: string; text?: string }>
                     }>
                 }
             };
+
+            // Handle simple string content (could contain local-command-stdout)
+            if (userMsg.message?.content && typeof userMsg.message.content === 'string') {
+                const content = userMsg.message.content;
+
+                // Check for local-command-stdout content
+                const commandOutputMatch = content.match(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/);
+                if (commandOutputMatch && commandOutputMatch[1]) {
+                    const commandOutput = commandOutputMatch[1];
+                    console.log(`[COMMAND] Detected command output from Claude`);
+
+                    // Check if this is /context output
+                    if (commandOutput.includes('## Context Usage') &&
+                        commandOutput.includes('Model:') &&
+                        commandOutput.includes('Tokens:')) {
+
+                        const contextData = this.parseContextOutput(commandOutput);
+                        const proc = this.processes.get(sessionId);
+                        if (contextData && proc) {
+                            console.log(`[CONTEXT] Parsed authoritative usage from command: ${contextData.tokens} / ${contextData.contextWindow} (${contextData.usedPercent}%)`);
+
+                            // Update process state with authoritative values from /context
+                            if (contextData.model) proc.model = contextData.model;
+                            if (contextData.tokens) {
+                                // The /context output shows total tokens in use, not broken down by type
+                                // Reset all token counters and use the total from /context as input tokens
+                                proc.totalInputTokens = contextData.tokens;
+                                proc.totalOutputTokens = 0;
+                                proc.cacheReadTokens = 0;
+                                proc.cacheCreationTokens = 0;
+                            }
+                            if (contextData.contextWindow) proc.contextWindow = contextData.contextWindow;
+
+                            // Emit usage update with authoritative values
+                            this.emitUsage(sessionId, proc);
+
+                            // Handle context checking flow
+                            if (proc.isCheckingContext && contextData.usedPercent !== undefined) {
+                                console.log(`[CONTEXT] Got context update from manual command: ${contextData.usedPercent}% used`);
+                                proc.isCheckingContext = false;
+
+                                // Check if we need to compact
+                                if (contextData.usedPercent >= 100) {
+                                    console.log(`[CONTEXT] Need to compact - at ${contextData.usedPercent}% usage`);
+
+                                    // NOW we know we need to compact, so set the compacting state
+                                    proc.isCompacting = true;
+                                    proc.compactStartTime = Date.now();
+                                    proc.compactStartContext = proc.totalInputTokens + proc.totalOutputTokens;
+
+                                    // Save compact start meta message
+                                    this.saveMetaMessage(sessionId, 'compact', {
+                                        startContext: proc.compactStartContext,
+                                        endContext: 0, // Will be updated when complete
+                                        isActive: true,
+                                    });
+
+                                    // Emit compacting status
+                                    this.io.to(`session:${sessionId}`).emit('session:compacting', {
+                                        sessionId,
+                                        isCompacting: true,
+                                    });
+
+                                    // Send compact command
+                                    this.sendMessage(sessionId, proc.userId, '/compact', undefined, true);
+                                } else {
+                                    console.log(`[CONTEXT] No compact needed - at ${contextData.usedPercent}% usage`);
+                                    // Process queued messages
+                                    this.processQueuedMessages(sessionId);
+                                }
+                            }
+                        } else if (proc?.isCheckingContext) {
+                            // Safety reset: context output detected but parsing failed
+                            console.log(`[CONTEXT] WARNING: Context output (command) detected but parsing failed, resetting isCheckingContext`);
+                            console.log(`[CONTEXT] Raw command output: ${commandOutput.substring(0, 500)}`);
+                            proc.isCheckingContext = false;
+                            // Process any queued messages to prevent stuck state
+                            this.processQueuedMessages(sessionId);
+                        }
+                    }
+
+                    // Check if we should relay this context message to the user
+                    const proc = this.processes.get(sessionId);
+                    const isContextCommand = commandOutput.includes('## Context Usage');
+                    const shouldRelay = !isContextCommand || (proc && proc.relayContextMessage > 0);
+
+                    if (shouldRelay) {
+                        // Emit as command_output event (creates meta message in frontend)
+                        const commandOutputData = {
+                            sessionId,
+                            output: commandOutput,
+                        };
+                        this.bufferMessage(sessionId, 'command_output', commandOutputData);
+                        this.io.to(`session:${sessionId}`).emit('session:command_output', commandOutputData);
+
+                        // Decrement counter if this was a context command
+                        if (isContextCommand && proc && proc.relayContextMessage > 0) {
+                            proc.relayContextMessage--;
+                            console.log(`[CONTEXT] Relayed context message, counter now: ${proc.relayContextMessage}`);
+                        }
+                    } else {
+                        console.log(`[CONTEXT] Suppressing context output (counter: ${proc?.relayContextMessage || 0})`);
+                    }
+                }
+            }
+
+            // Handle array content (tool results)
             if (userMsg.message?.content && Array.isArray(userMsg.message.content)) {
                 for (const block of userMsg.message.content) {
                     if (block.type === 'tool_result' && block.tool_use_id) {
@@ -1008,10 +1303,57 @@ export class ClaudeProcessManager {
                 sessionId,
                 isThinking: false,
             });
+
+            // If we were compacting, mark it as complete
+            if (proc.isCompacting) {
+                proc.isCompacting = false;
+                const endContext = proc.totalInputTokens + proc.totalOutputTokens;
+                const duration = proc.compactStartTime ? Date.now() - proc.compactStartTime : undefined;
+
+                console.log(`[AUTO-COMPACT] Compaction complete for session ${sessionId}`);
+
+                // Save compact complete meta message
+                this.saveMetaMessage(sessionId, 'compact', {
+                    startContext: proc.compactStartContext || 0,
+                    endContext,
+                    duration,
+                    isActive: false,
+                });
+
+                this.io.to(`session:${sessionId}`).emit('session:compacting', {
+                    sessionId,
+                    isCompacting: false,
+                });
+            }
+
+            // Safety reset: if we were checking context and the turn ended, reset the flag
+            // This prevents stuck state if context output wasn't properly detected
+            if (proc.isCheckingContext) {
+                console.log(`[CONTEXT] WARNING: Turn ended while still checking context, resetting isCheckingContext`);
+                proc.isCheckingContext = false;
+                // Process any queued messages to prevent stuck state
+                this.processQueuedMessages(sessionId);
+            }
         }
     }
 
     private saveAssistantMessage(sessionId: string, content: string): void {
+        const proc = this.processes.get(sessionId);
+
+        // Suppress messages during auto-compacting
+        if (proc?.isCompacting) {
+            console.log(`[AUTO-COMPACT] Suppressing assistant message during compaction`);
+            return;
+        }
+
+        // Handle conversation resumed message
+        if (content.trim() === 'Conversation resumed successfully.' ||
+            content.trim().startsWith('Conversation resumed')) {
+            console.log(`[RESUME] Converting conversation resumed to meta message`);
+            this.saveMetaMessage(sessionId, 'resume', {});
+            return;
+        }
+
         const db = getDatabase();
         const messageId = nanoid();
         const createdAt = new Date().toISOString();
@@ -1038,6 +1380,36 @@ export class ClaudeProcessManager {
         });
 
         console.log(`Saved assistant message [${sessionId}]: ${content.substring(0, 100)}...`);
+    }
+
+    private saveMetaMessage(sessionId: string, metaType: 'compact' | 'resume' | 'restart' | 'command_output', metaData: any): void {
+        const db = getDatabase();
+        const messageId = nanoid();
+        const createdAt = new Date().toISOString();
+
+        // Insert meta message with serialized metadata
+        db.prepare('INSERT INTO messages (id, session_id, role, content, created_at, meta_type, meta_data) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+            messageId,
+            sessionId,
+            'meta',
+            '', // Meta messages have empty content
+            createdAt,
+            metaType,
+            JSON.stringify(metaData)
+        );
+
+        // Emit meta message to frontend
+        this.io.to(`session:${sessionId}`).emit('session:message', {
+            id: messageId,
+            sessionId,
+            role: 'meta',
+            content: '',
+            createdAt,
+            metaType,
+            metaData,
+        });
+
+        console.log(`Saved meta message [${sessionId}]: ${metaType}`, metaData);
     }
 
     private saveToolExecution(
@@ -1097,7 +1469,8 @@ export class ClaudeProcessManager {
         sessionId: string,
         userId: string,
         message: string,
-        images?: ImageData[]
+        images?: ImageData[],
+        suppressSaving = false
     ): Promise<void> {
         let proc = this.processes.get(sessionId);
 
@@ -1161,28 +1534,61 @@ This is the project you should be working on. All file operations should be rela
             filename: path.basename(p),
         }));
 
-        // Save user message and emit to frontend (show original message, images as metadata)
-        const db = getDatabase();
-        const messageId = nanoid();
-        const createdAt = new Date().toISOString();
-        // Use explicit createdAt to ensure millisecond precision for proper ordering
-        db.prepare('INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)').run(
-            messageId,
-            sessionId,
-            'user',
-            message, // Store only the user's original message
-            createdAt
-        );
+        // Check if this is a user-initiated /context command
+        if (!suppressSaving && message.trim() === '/context' && proc) {
+            proc.relayContextMessage++;
+            console.log(`[CONTEXT] User ran /context command, relay counter: ${proc.relayContextMessage}`);
+        }
 
-        // Emit user message to frontend so it appears in chat
-        this.io.to(`session:${sessionId}`).emit('session:message', {
-            id: messageId,
-            sessionId,
-            role: 'user',
-            content: message,
-            createdAt,
-            images: imageMetadata.length > 0 ? imageMetadata : undefined,
-        });
+        // Save user message and emit to frontend (show original message, images as metadata)
+        if (!suppressSaving) {
+            const db = getDatabase();
+            const messageId = nanoid();
+            const createdAt = new Date().toISOString();
+            // Use explicit createdAt to ensure millisecond precision for proper ordering
+            db.prepare('INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)').run(
+                messageId,
+                sessionId,
+                'user',
+                message, // Store only the user's original message
+                createdAt
+            );
+
+            // Emit user message to frontend so it appears in chat
+            this.io.to(`session:${sessionId}`).emit('session:message', {
+                id: messageId,
+                sessionId,
+                role: 'user',
+                content: message,
+                createdAt,
+                images: imageMetadata.length > 0 ? imageMetadata : undefined,
+            });
+        }
+
+        // Check context usage before sending (skip for system commands like /context, /compact)
+        // System commands use suppressSaving=true and must bypass buffering to avoid deadlock
+        if (!suppressSaving) {
+            const totalInputTokens = proc.totalInputTokens + proc.cacheCreationTokens + proc.cacheReadTokens;
+            const totalTokens = totalInputTokens + proc.totalOutputTokens;
+            const contextUsedPercent = Math.round((totalTokens / proc.contextWindow) * 100);
+
+            // If we're approaching the threshold or already checking context, buffer the message
+            if (contextUsedPercent >= proc.contextCheckThreshold || proc.isCheckingContext) {
+                console.log(`[CONTEXT] Buffering message - usage at ${contextUsedPercent}%, threshold is ${proc.contextCheckThreshold}%`);
+                proc.outgoingMessageQueue.push({message: messageForClaude, images: undefined, suppressSaving});
+
+                // If not already checking context, start the check
+                if (!proc.isCheckingContext) {
+                    console.log(`[CONTEXT] Starting context check for session ${sessionId}`);
+                    proc.isCheckingContext = true;
+
+                    // Send /context command to get real usage
+                    this.sendMessage(sessionId, userId, '/context', undefined, true);
+                }
+
+                return; // Don't send the message yet
+            }
+        }
 
         // Emit thinking indicator
         this.io.to(`session:${sessionId}`).emit('session:thinking', {
@@ -1203,7 +1609,7 @@ This is the project you should be working on. All file operations should be rela
         console.log(`Sent message [${sessionId}]: ${messageForClaude.substring(0, 100)}...`);
     }
 
-    interrupt(sessionId: string, userId: string): void {
+    async interrupt(sessionId: string, userId: string): Promise<void> {
         const proc = this.processes.get(sessionId);
         if (!proc) {
             throw new Error('Session not running');
@@ -1229,10 +1635,32 @@ This is the project you should be working on. All file operations should be rela
             isThinking: false,
         });
 
+        // Deny any pending permissions on interrupt
+        const { denyPendingPermissionsForSession } = await import('../../routes/permissions');
+        denyPendingPermissionsForSession(sessionId);
+
+        // Deny any pending plan approvals on interrupt
+        const { denyPendingPlanApprovalsForSession } = await import('../../routes/plan');
+        denyPendingPlanApprovalsForSession(sessionId);
+
+        // Update session status to stopped
+        this.io.to(`session:${sessionId}`).emit('session:status', {
+            sessionId,
+            status: 'stopped',
+        });
+
+        // Update database to mark session as inactive
+        const db = getDatabase();
+        db.prepare('UPDATE sessions SET status = ?, session_state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
+            'stopped',
+            'inactive',
+            sessionId
+        );
+
         // In stream-json mode, we can't just send Ctrl+C since there's no PTY.
         // Try sending an interrupt message via stdin in stream-json format.
         // If that doesn't work, fall back to SIGINT which may kill the process.
-        const interruptMsg = { type: 'interrupt' };
+        const interruptMsg = {type: 'interrupt'};
         proc.process.stdin?.write(JSON.stringify(interruptMsg) + '\n');
         console.log(`[INTERRUPT] Sent interrupt message to session ${sessionId}`);
     }
@@ -1240,6 +1668,41 @@ This is the project you should be working on. All file operations should be rela
     async sendRawInput(sessionId: string, userId: string, input: string): Promise<void> {
         // In stream-json mode, raw input is treated as a user message
         await this.sendMessage(sessionId, userId, input);
+    }
+
+    /**
+     * Send raw JSON message to Claude process.
+     * Used for debug panel to send arbitrary JSON messages.
+     */
+    async sendRawJson(sessionId: string, userId: string, jsonMessage: any): Promise<void> {
+        const proc = this.processes.get(sessionId);
+
+        if (!proc) {
+            await this.startSession(sessionId, userId);
+            const newProc = this.processes.get(sessionId);
+            if (!newProc) {
+                throw new Error('Failed to start session');
+            }
+            // Wait for Claude to initialize
+            await new Promise((resolve) => setTimeout(resolve, 500));
+        } else if (proc.userId !== userId) {
+            throw new Error('Unauthorized');
+        }
+
+        const finalProc = this.processes.get(sessionId);
+        if (!finalProc) {
+            throw new Error('Session not found');
+        }
+
+        // Emit debug event for sent message
+        this.io.to(`session:${sessionId}`).emit('debug:claude:sent', {
+            sessionId,
+            message: jsonMessage,
+        });
+
+        // Send the raw JSON
+        finalProc.process.stdin?.write(JSON.stringify(jsonMessage) + '\n');
+        console.log(`[DEBUG] Sent raw JSON to session ${sessionId}:`, JSON.stringify(jsonMessage).substring(0, 200));
     }
 
     /**
@@ -1316,18 +1779,27 @@ This is the project you should be working on. All file operations should be rela
 
         // Clear claude_session_id to start fresh (not resume)
         const db = getDatabase();
-        db.prepare('UPDATE sessions SET status = ?, claude_session_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
+        db.prepare('UPDATE sessions SET status = ?, session_state = ?, claude_session_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
             'stopped',
+            'inactive',
             sessionId
         );
         console.log(`[SESSION] Cleared claude_session_id for fresh start`);
 
-        // Delete all messages and tool executions for this session
-        const messagesResult = db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
+        // Don't delete messages - we want to preserve chat history
+        // Only clear tool executions since those are tied to the Claude session
         const toolsResult = db.prepare('DELETE FROM tool_executions WHERE session_id = ?').run(sessionId);
-        console.log(`[SESSION] Deleted ${messagesResult.changes} messages and ${toolsResult.changes} tool executions`);
+        console.log(`[SESSION] Deleted ${toolsResult.changes} tool executions`);
 
-        // Emit restarted event so frontend can clear its state
+        // Clear any pending permissions since the process is gone
+        const { clearPendingPermissionsForSession } = await import('../../routes/permissions');
+        clearPendingPermissionsForSession(sessionId);
+
+        // Clear any pending plan approvals since the process is gone
+        const { clearPendingPlanApprovalsForSession } = await import('../../routes/plan');
+        clearPendingPlanApprovalsForSession(sessionId);
+
+        // Emit restarted event so frontend knows the Claude process restarted
         this.io.to(`session:${sessionId}`).emit('session:restarted', {sessionId});
 
         // Wait a moment for cleanup
@@ -1336,7 +1808,52 @@ This is the project you should be working on. All file operations should be rela
         // Start fresh with the same mode
         await this.startSession(sessionId, userId, currentMode);
 
+        // Save restart meta message
+        this.saveMetaMessage(sessionId, 'restart', {time: new Date().toISOString()});
+
         console.log(`[SESSION] Session ${sessionId} restarted`);
+    }
+
+    // Resume a session (used after backend restart to reconnect without empty message)
+    async resumeSession(sessionId: string, userId: string): Promise<void> {
+        console.log(`[SESSION] Resuming session ${sessionId}`);
+
+        const proc = this.processes.get(sessionId);
+        if (proc) {
+            console.log(`[SESSION] Session ${sessionId} is already running`);
+            return;
+        }
+
+        // Get session details from database
+        const db = getDatabase();
+        const session = db
+            .prepare('SELECT working_directory, claude_session_id, session_state FROM sessions WHERE id = ? AND user_id = ?')
+            .get(sessionId, userId) as { working_directory: string; claude_session_id: string | null; session_state: string } | undefined;
+
+        if (!session) {
+            throw new Error('Session not found');
+        }
+
+        // Check the mode that was set for this session (either from pending or default)
+        const mode = this.pendingModes.get(sessionId) ?? 'auto-accept';
+
+        // Start the session - it will automatically resume from previous context
+        // because we're keeping the claude_session_id
+        await this.startSession(sessionId, userId, mode);
+
+        // Save resume meta message to indicate the conversation was resumed
+        this.saveMetaMessage(sessionId, 'resume', { time: new Date().toISOString() });
+
+        // Send an empty message to trigger Claude to continue
+        // This is needed when Claude was waiting for a permission response
+        setTimeout(() => {
+            console.log(`[SESSION] Sending empty message to trigger continuation for session ${sessionId}`);
+            this.sendMessage(sessionId, userId, '', undefined, true).catch(err => {
+                console.error(`[SESSION] Failed to send continuation message:`, err);
+            });
+        }, 1000);
+
+        console.log(`[SESSION] Session ${sessionId} resumed with existing context`);
     }
 
     // Set permission mode for a session
@@ -1417,7 +1934,8 @@ This is the project you should be working on. All file operations should be rela
 
         // Check if model is already the same (avoid unnecessary restart)
         const currentModel = proc.model.includes('opus') ? 'opus' :
-                            proc.model.includes('haiku') ? 'haiku' : 'sonnet';
+            proc.model.includes('haiku') ? 'haiku' :
+                proc.model.includes('sonnet') ? 'sonnet' : 'opus';
 
         if (currentModel === model) {
             console.log(`[MODEL] Session ${sessionId} already using model ${model}`);
@@ -1456,8 +1974,14 @@ This is the project you should be working on. All file operations should be rela
         this.processes.delete(sessionId);
 
         const db = getDatabase();
-        db.prepare('UPDATE sessions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
+        // Check if there are pending messages - if so, set to 'has-pending' instead of 'inactive'
+        const pendingCount = db.prepare('SELECT COUNT(*) as count FROM pending_messages WHERE session_id = ?')
+            .get(sessionId) as { count: number } | undefined;
+        const newState = (pendingCount?.count ?? 0) > 0 ? 'has-pending' : 'inactive';
+
+        db.prepare('UPDATE sessions SET status = ?, session_state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
             'stopped',
+            newState,
             sessionId
         );
 
@@ -1469,5 +1993,62 @@ This is the project you should be working on. All file operations should be rela
 
     getRunningSessionIds(): string[] {
         return Array.from(this.processes.keys());
+    }
+
+    private parseContextOutput(content: string): {
+        model?: string;
+        tokens?: number;
+        contextWindow?: number;
+        usedPercent?: number;
+    } | null {
+        // Match the model line
+        const modelMatch = content.match(/\*\*Model:\*\*\s+(\S+)/);
+
+        // Match the tokens line (e.g., "66.6k / 200.0k (33%)")
+        const tokensMatch = content.match(/\*\*Tokens:\*\*\s+([\d.]+)k\s*\/\s*([\d.]+)k\s*\((\d+)%\)/);
+
+        if (modelMatch && modelMatch[1] && tokensMatch && tokensMatch[1] && tokensMatch[2] && tokensMatch[3]) {
+            return {
+                model: modelMatch[1],
+                tokens: parseFloat(tokensMatch[1]) * 1000,
+                contextWindow: parseFloat(tokensMatch[2]) * 1000,
+                usedPercent: parseInt(tokensMatch[3])
+            };
+        }
+
+        return null;
+    }
+
+    private processQueuedMessages(sessionId: string): void {
+        const proc = this.processes.get(sessionId);
+        if (!proc) return;
+
+        console.log(`[CONTEXT] Processing ${proc.outgoingMessageQueue.length} queued messages`);
+
+        // Process all queued messages
+        const messages = [...proc.outgoingMessageQueue];
+        proc.outgoingMessageQueue = [];
+
+        for (const queuedMsg of messages) {
+            // Send the message directly (bypassing the check since we just verified context)
+            console.log(`[CONTEXT] Sending queued message: ${queuedMsg.message.substring(0, 50)}...`);
+
+            // Emit thinking indicator
+            this.io.to(`session:${sessionId}`).emit('session:thinking', {
+                sessionId,
+                isThinking: true,
+            });
+
+            // Send as stream-json input
+            const inputMsg = {
+                type: 'user',
+                message: {
+                    role: 'user',
+                    content: queuedMsg.message,
+                },
+            };
+
+            proc.process.stdin?.write(JSON.stringify(inputMsg) + '\n');
+        }
     }
 }

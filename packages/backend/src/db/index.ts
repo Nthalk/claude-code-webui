@@ -146,10 +146,73 @@ function runMigrations(db: Database.Database): void {
 
   // Migration: Add model column to existing sessions table
   try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN model TEXT DEFAULT 'sonnet'`);
+    db.exec(`ALTER TABLE sessions ADD COLUMN model TEXT DEFAULT 'opus'`);
   } catch {
     // Column already exists, ignore error
   }
+
+  // Migration: Add auto-compact columns to user_settings table
+  try {
+    db.exec(`ALTER TABLE user_settings ADD COLUMN auto_compact_enabled INTEGER DEFAULT 1`);
+  } catch {
+    // Column already exists, ignore error
+  }
+
+  try {
+    db.exec(`ALTER TABLE user_settings ADD COLUMN auto_compact_threshold INTEGER DEFAULT 95`);
+  } catch {
+    // Column already exists, ignore error
+  }
+
+  // Migration: Add meta message columns to messages table
+  try {
+    db.exec(`ALTER TABLE messages ADD COLUMN meta_type TEXT`);
+  } catch {
+    // Column already exists, ignore error
+  }
+
+  try {
+    db.exec(`ALTER TABLE messages ADD COLUMN meta_data TEXT`);
+  } catch {
+    // Column already exists, ignore error
+  }
+
+  // Migration: Add session_state column to sessions table
+  // Values: 'inactive' (default), 'active' (Claude process running), 'has-pending' (has queued messages)
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN session_state TEXT DEFAULT 'inactive'`);
+  } catch {
+    // Column already exists, ignore error
+  }
+
+  // Migration: Create pending_messages table for storing messages queued while session is inactive
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pending_messages (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      content TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_pending_messages_session_id ON pending_messages(session_id);
+  `);
+
+  // Migration: Create pending_permissions table for storing active permission requests
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pending_permissions (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      request_id TEXT NOT NULL UNIQUE,
+      tool_name TEXT NOT NULL,
+      arguments TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      response_action TEXT,
+      response_pattern TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      responded_at DATETIME
+    );
+    CREATE INDEX IF NOT EXISTS idx_pending_permissions_session_id ON pending_permissions(session_id);
+    CREATE INDEX IF NOT EXISTS idx_pending_permissions_request_id ON pending_permissions(request_id);
+  `);
 }
 
 export { db };

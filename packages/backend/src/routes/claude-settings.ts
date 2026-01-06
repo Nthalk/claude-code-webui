@@ -26,7 +26,7 @@ import os from 'os';
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth';
 import { AppError, asyncHandler } from '../middleware/errorHandler';
 import { getDatabase } from '../db';
-import { validatePatternSyntax, type PatternValidationError } from '../cli/permission-prompt';
+import { validatePatternSyntax, type PatternValidationError } from '../utils/pattern-validation';
 
 const router = Router();
 
