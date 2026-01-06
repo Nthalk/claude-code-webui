@@ -272,9 +272,6 @@ interface SessionProjection {
 
 // Shared dropdown content for stats details
 function StatsDropdownContent({
-  fullModel,
-  currentModelType,
-  onModelChange,
   contextPercent,
   rawContextPercent,
   totalTokens,
@@ -286,10 +283,10 @@ function StatsDropdownContent({
   weeklyAllProjection,
   weeklySonnetProjection,
   sessionProjection,
+  sessionResetsAt,
+  weeklyAllResetsAt,
+  weeklySonnetResetsAt,
 }: {
-  fullModel: string;
-  currentModelType: ModelType;
-  onModelChange?: (model: ModelType) => void;
   contextPercent: number;
   rawContextPercent: number;
   totalTokens: number;
@@ -301,6 +298,9 @@ function StatsDropdownContent({
   weeklyAllProjection: ProjectedUsage | null;
   weeklySonnetProjection: ProjectedUsage | null;
   sessionProjection: SessionProjection | null;
+  sessionResetsAt?: Date;
+  weeklyAllResetsAt?: Date;
+  weeklySonnetResetsAt?: Date;
 }) {
   const getColor = (p: number) => {
     if (p <= 10) return 'bg-red-500';
@@ -318,53 +318,34 @@ function StatsDropdownContent({
     return 'text-green-500';
   };
 
-  const currentModel = modelConfig[currentModelType];
-  const ModelIcon = currentModel.icon;
+  // Helper to format reset time
+  const formatResetTime = (resetsAt?: Date) => {
+    if (!resetsAt) return null;
+    const now = new Date();
+    const timeRemaining = resetsAt.getTime() - now.getTime();
+
+    if (timeRemaining <= 0) return 'Now';
+
+    const hours = Math.floor(timeRemaining / (1000 * 60 * 60));
+    const minutes = Math.floor((timeRemaining % (1000 * 60 * 60)) / (1000 * 60));
+
+    if (hours > 24) {
+      const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const day = days[resetsAt.getDay()];
+      const resetHours = resetsAt.getHours().toString().padStart(2, '0');
+      const resetMinutes = resetsAt.getMinutes().toString().padStart(2, '0');
+      return `${day} ${resetHours}:${resetMinutes}`;
+    } else if (hours > 0) {
+      return `in ${hours}h ${minutes}m`;
+    } else {
+      return `in ${minutes}m`;
+    }
+  };
 
   return (
     <div className="space-y-3">
-      {/* Model Section */}
-      <div>
-        <div className="flex items-center gap-2 mb-2">
-          <ModelIcon className={cn('h-4 w-4', currentModel.color)} />
-          <div>
-            <div className={cn('text-sm font-medium', currentModel.color)}>
-              {currentModel.label}
-            </div>
-            <div className="text-[10px] text-muted-foreground font-mono">
-              {fullModel}
-            </div>
-          </div>
-        </div>
-        {onModelChange && (
-          <div className="flex gap-1">
-            {(Object.entries(modelConfig) as [ModelType, typeof modelConfig[ModelType]][]).map(
-              ([key, config]) => {
-                const Icon = config.icon;
-                const isActive = key === currentModelType;
-                return (
-                  <button
-                    key={key}
-                    onClick={() => onModelChange(key)}
-                    className={cn(
-                      'flex-1 flex items-center justify-center gap-1 py-1.5 px-2 rounded text-[10px] font-medium transition-colors',
-                      isActive
-                        ? `bg-muted ${config.color}`
-                        : 'hover:bg-muted/50 text-muted-foreground'
-                    )}
-                  >
-                    <Icon className="h-3 w-3" />
-                    {config.shortLabel}
-                  </button>
-                );
-              }
-            )}
-          </div>
-        )}
-      </div>
-
       {/* Context */}
-      <div className="pt-2 border-t">
+      <div>
         <div className="flex items-center justify-between mb-1">
           <span className="text-xs font-medium">Context Remaining</span>
         </div>
@@ -389,7 +370,7 @@ function StatsDropdownContent({
       )}
 
       {/* Limits */}
-      <div className="space-y-2 pt-1 border-t">
+      <div className="space-y-2 pt-2 border-t">
         <div>
           <div className="flex items-center justify-between">
             <span className="text-xs text-muted-foreground">Session Remaining</span>
@@ -398,11 +379,18 @@ function StatsDropdownContent({
             </span>
           </div>
           {sessionProjection && (
-            <div className={cn("text-[10px] mt-0.5", sessionProjection.willDeplete ? "text-red-500" : "text-muted-foreground")}>
-              {sessionProjection.willDeplete
-                ? `⚠ Depletes ${sessionProjection.depleteTime}`
-                : `Ends ${sessionProjection.remainingTime}`}
-            </div>
+            <>
+              <div className={cn("text-[10px] mt-0.5", sessionProjection.willDeplete ? "text-red-500" : "text-muted-foreground")}>
+                {sessionProjection.willDeplete
+                  ? `⚠ Depletes ${sessionProjection.depleteTime}`
+                  : `Ends ${sessionProjection.remainingTime}`}
+              </div>
+              {sessionProjection.willDeplete && formatResetTime(sessionResetsAt) && (
+                <div className="text-[10px] text-muted-foreground">
+                  Refreshes {formatResetTime(sessionResetsAt)}
+                </div>
+              )}
+            </>
           )}
         </div>
         <div>
@@ -413,11 +401,18 @@ function StatsDropdownContent({
             </span>
           </div>
           {weeklyAllProjection && (
-            <div className={cn("text-[10px] mt-0.5", weeklyAllProjection.willDeplete ? "text-red-500" : "text-muted-foreground")}>
-              {weeklyAllProjection.willDeplete
-                ? `⚠ Depletes ${weeklyAllProjection.depleteTime}`
-                : `→ ${weeklyAllProjection.percentRemainingAtReset}% at reset (${weeklyAllProjection.resetTime})`}
-            </div>
+            <>
+              <div className={cn("text-[10px] mt-0.5", weeklyAllProjection.willDeplete ? "text-red-500" : "text-muted-foreground")}>
+                {weeklyAllProjection.willDeplete
+                  ? `⚠ Depletes ${weeklyAllProjection.depleteTime}`
+                  : `→ ${weeklyAllProjection.percentRemainingAtReset}% at reset (${weeklyAllProjection.resetTime})`}
+              </div>
+              {weeklyAllProjection.willDeplete && formatResetTime(weeklyAllResetsAt) && (
+                <div className="text-[10px] text-muted-foreground">
+                  Refreshes {formatResetTime(weeklyAllResetsAt)}
+                </div>
+              )}
+            </>
           )}
         </div>
         <div>
@@ -428,11 +423,18 @@ function StatsDropdownContent({
             </span>
           </div>
           {weeklySonnetProjection && (
-            <div className={cn("text-[10px] mt-0.5", weeklySonnetProjection.willDeplete ? "text-red-500" : "text-muted-foreground")}>
-              {weeklySonnetProjection.willDeplete
-                ? `⚠ Depletes ${weeklySonnetProjection.depleteTime}`
-                : `→ ${weeklySonnetProjection.percentRemainingAtReset}% at reset (${weeklySonnetProjection.resetTime})`}
-            </div>
+            <>
+              <div className={cn("text-[10px] mt-0.5", weeklySonnetProjection.willDeplete ? "text-red-500" : "text-muted-foreground")}>
+                {weeklySonnetProjection.willDeplete
+                  ? `⚠ Depletes ${weeklySonnetProjection.depleteTime}`
+                  : `→ ${weeklySonnetProjection.percentRemainingAtReset}% at reset (${weeklySonnetProjection.resetTime})`}
+              </div>
+              {weeklySonnetProjection.willDeplete && formatResetTime(weeklySonnetResetsAt) && (
+                <div className="text-[10px] text-muted-foreground">
+                  Refreshes {formatResetTime(weeklySonnetResetsAt)}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -815,9 +817,6 @@ export function SessionControls({
         }}
       >
         <StatsDropdownContent
-          fullModel={model}
-          currentModelType={currentModelType}
-          onModelChange={onModelChange}
           contextPercent={contextPercent}
           rawContextPercent={rawContextPercent}
           totalTokens={totalTokens}
@@ -829,6 +828,9 @@ export function SessionControls({
           weeklyAllProjection={weeklyAllProjection}
           weeklySonnetProjection={weeklySonnetProjection}
           sessionProjection={sessionProjection}
+          sessionResetsAt={defaultSessionLimit.resetsAt}
+          weeklyAllResetsAt={defaultWeeklyAll.resetsAt}
+          weeklySonnetResetsAt={defaultWeeklySonnet.resetsAt}
         />
       </div>
     </>,
