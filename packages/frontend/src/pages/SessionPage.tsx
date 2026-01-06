@@ -1362,16 +1362,17 @@ export function SessionPage() {
         )}
       </div>
 
-      {/* Input */}
-      <div className="shrink-0 pt-1 md:pt-4 border-t space-y-1 md:space-y-3">
-        {/* Plan Approval Input - replaces regular input when a plan needs approval */}
-        {currentPendingPlanApproval ? (
-          <PlanApprovalInput
-            onRespond={handlePlanApprovalResponse}
-            planContent={currentPendingPlanApproval?.planContent}
-          />
-        ) : (
-          <>
+      {/* Input - Hidden when in editor view */}
+      {mainView !== 'editor' && (
+        <div className="shrink-0 pt-1 md:pt-4 border-t space-y-1 md:space-y-3">
+          {/* Plan Approval Input - replaces regular input when a plan needs approval */}
+          {currentPendingPlanApproval ? (
+            <PlanApprovalInput
+              onRespond={handlePlanApprovalResponse}
+              planContent={currentPendingPlanApproval?.planContent}
+            />
+          ) : (
+            <>
             {/* Image attachments preview */}
             {attachments.length > 0 && (
               <div className="flex flex-wrap gap-2 p-3 rounded-xl bg-muted/50 border animate-scale-in">
@@ -1536,6 +1537,7 @@ export function SessionPage() {
           </>
         )}
       </div>
+      )}
 
       {/* Permission Approval Dialog */}
       {currentPendingPermission && (
