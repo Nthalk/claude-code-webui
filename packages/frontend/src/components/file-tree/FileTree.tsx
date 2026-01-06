@@ -5,12 +5,13 @@ import {
   RefreshCw,
   ChevronDown,
   ChevronRight,
-  FolderTree,
   Loader2,
   X,
   List,
   LayoutList,
   Table2,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -86,11 +87,30 @@ export function FileTree({
 }: FileTreeProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('simple');
+  const [showDotfiles, setShowDotfiles] = useState(() => {
+    // Load preference from localStorage
+    const stored = localStorage.getItem('fileTree.showDotfiles');
+    return stored ? stored === 'true' : false;
+  });
   const [treeState, setTreeState] = useState<TreeState>({
     expanded: { [workingDirectory]: true },
     loading: {},
     children: {},
   });
+  const [shouldAutoExpand, setShouldAutoExpand] = useState(false);
+
+  // Filter function to handle both dotfiles and excluded directories
+  const filterFileList = useCallback((files: FileInfo[]) => {
+    return files.filter(f => {
+      // Filter out excluded directories
+      if (EXCLUDED_DIRS.has(f.name)) return false;
+
+      // Filter out dotfiles if showDotfiles is false
+      if (!showDotfiles && f.name.startsWith('.')) return false;
+
+      return true;
+    });
+  }, [showDotfiles]);
 
   // Cycle through view modes
   const cycleViewMode = useCallback(() => {
@@ -103,13 +123,13 @@ export function FileTree({
 
   // Fetch root directory contents
   const { data: rootFiles, isLoading: rootLoading, refetch } = useQuery({
-    queryKey: ['files', workingDirectory],
+    queryKey: ['files', workingDirectory, showDotfiles],
     queryFn: async () => {
       const response = await api.get<ApiResponse<DirectoryContents>>(
         `/api/files?path=${encodeURIComponent(workingDirectory)}`
       );
       if (response.data.success && response.data.data) {
-        return response.data.data.files.filter(f => !EXCLUDED_DIRS.has(f.name));
+        return filterFileList(response.data.data.files);
       }
       return [];
     },
@@ -125,6 +145,19 @@ export function FileTree({
       }));
     }
   }, [rootFiles, workingDirectory]);
+
+  // Clear cached children when dotfiles visibility changes
+  useEffect(() => {
+    setTreeState(prev => ({
+      ...prev,
+      children: { [workingDirectory]: rootFiles || [] },
+    }));
+  }, [showDotfiles, workingDirectory, rootFiles]);
+
+  // Save dotfiles preference to localStorage
+  useEffect(() => {
+    localStorage.setItem('fileTree.showDotfiles', showDotfiles.toString());
+  }, [showDotfiles]);
 
   // Load directory contents
   const loadDirectory = useCallback(async (path: string) => {
@@ -142,7 +175,7 @@ export function FileTree({
         `/api/files?path=${encodeURIComponent(path)}`
       );
       if (response.data.success && response.data.data) {
-        const files = response.data.data.files.filter(f => !EXCLUDED_DIRS.has(f.name));
+        const files = filterFileList(response.data.data.files);
         setTreeState(prev => ({
           ...prev,
           loading: { ...prev.loading, [path]: false },
@@ -156,7 +189,7 @@ export function FileTree({
         loading: { ...prev.loading, [path]: false },
       }));
     }
-  }, [treeState.loading, treeState.children]);
+  }, [treeState.loading, treeState.children, filterFileList]);
 
   // Toggle directory expansion
   const toggleExpand = useCallback((path: string, isDirectory: boolean) => {
@@ -217,6 +250,39 @@ export function FileTree({
     });
   }, [treeState.children]);
 
+  // Count total matches recursively
+  const countMatches = useCallback((files: FileInfo[], query: string): number => {
+    if (!query) return 0;
+
+    const lowerQuery = query.toLowerCase();
+    let count = 0;
+
+    for (const file of files) {
+      if (file.name.toLowerCase().includes(lowerQuery)) {
+        count++;
+      }
+
+      if (file.type === 'directory') {
+        const children = treeState.children[file.path];
+        if (children) {
+          count += countMatches(children, query);
+        }
+      }
+    }
+
+    return count;
+  }, [treeState.children]);
+
+  // Calculate total matches and determine if we should auto-expand
+  useEffect(() => {
+    if (searchQuery && rootFiles) {
+      const totalMatches = countMatches(rootFiles, searchQuery);
+      setShouldAutoExpand(totalMatches > 0 && totalMatches < 30);
+    } else {
+      setShouldAutoExpand(false);
+    }
+  }, [searchQuery, rootFiles, countMatches]);
+
   // Render tree node
   const renderNode = useCallback((file: FileInfo, depth: number): React.ReactNode => {
     const isDirectory = file.type === 'directory';
@@ -229,9 +295,9 @@ export function FileTree({
     // Filter children if search query exists
     const filteredChildren = children ? filterFiles(children, searchQuery) : [];
 
-    // Auto-expand directories with matching children during search
-    const shouldAutoExpand = searchQuery && isDirectory && filteredChildren.length > 0;
-    if (shouldAutoExpand && !isExpanded && !treeState.loading[file.path]) {
+    // Auto-expand directories with matching children during search (only if total matches < 30)
+    const shouldExpandDir = shouldAutoExpand && searchQuery && isDirectory && filteredChildren.length > 0;
+    if (shouldExpandDir && !isExpanded && !treeState.loading[file.path]) {
       // Trigger expansion in next tick to avoid state update during render
       setTimeout(() => toggleExpand(file.path, true), 0);
     }
@@ -344,7 +410,7 @@ export function FileTree({
         )}
       </div>
     );
-  }, [treeState, selectedFile, searchQuery, viewMode, filterFiles, toggleExpand, handleSelect, handleOpen]);
+  }, [treeState, selectedFile, searchQuery, viewMode, filterFiles, toggleExpand, handleSelect, handleOpen, shouldAutoExpand]);
 
   // Sort and filter root files
   const displayFiles = useMemo(() => {
@@ -360,56 +426,63 @@ export function FileTree({
   return (
     <div className={cn('flex flex-col h-full bg-card', className)}>
       {/* Header */}
-      <div className="shrink-0 p-2 border-b space-y-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <FolderTree className="h-4 w-4" />
-            <span>Files</span>
+      <div className="shrink-0 p-2 border-b">
+        <div className="flex items-center gap-1">
+          {/* Search */}
+          <div className="relative flex-1">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              placeholder="Search files..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="h-7 pl-7 pr-7 text-sm"
+            />
+            {searchQuery && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="absolute right-0.5 top-1/2 -translate-y-1/2 h-6 w-6"
+                onClick={() => setSearchQuery('')}
+              >
+                <X className="h-3 w-3" />
+              </Button>
+            )}
           </div>
-          <div className="flex items-center gap-1">
-            {/* View mode toggle */}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6"
-              onClick={cycleViewMode}
-              title={`View: ${viewMode.charAt(0).toUpperCase() + viewMode.slice(1)}`}
-            >
-              {viewMode === 'simple' && <List className="h-3.5 w-3.5" />}
-              {viewMode === 'compact' && <LayoutList className="h-3.5 w-3.5" />}
-              {viewMode === 'detailed' && <Table2 className="h-3.5 w-3.5" />}
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6"
-              onClick={() => refetch()}
-              disabled={rootLoading}
-            >
-              <RefreshCw className={cn('h-3.5 w-3.5', rootLoading && 'animate-spin')} />
-            </Button>
-          </div>
-        </div>
 
-        {/* Search */}
-        <div className="relative">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-          <Input
-            placeholder="Search files..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="h-7 pl-7 pr-7 text-sm"
-          />
-          {searchQuery && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="absolute right-0.5 top-1/2 -translate-y-1/2 h-6 w-6"
-              onClick={() => setSearchQuery('')}
-            >
-              <X className="h-3 w-3" />
-            </Button>
-          )}
+          {/* Action buttons */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            onClick={() => setShowDotfiles(!showDotfiles)}
+            title={showDotfiles ? 'Hide dotfiles' : 'Show dotfiles'}
+          >
+            {showDotfiles ? (
+              <Eye className="h-3.5 w-3.5" />
+            ) : (
+              <EyeOff className="h-3.5 w-3.5" />
+            )}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            onClick={cycleViewMode}
+            title={`View: ${viewMode.charAt(0).toUpperCase() + viewMode.slice(1)}`}
+          >
+            {viewMode === 'simple' && <List className="h-3.5 w-3.5" />}
+            {viewMode === 'compact' && <LayoutList className="h-3.5 w-3.5" />}
+            {viewMode === 'detailed' && <Table2 className="h-3.5 w-3.5" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            onClick={() => refetch()}
+            disabled={rootLoading}
+          >
+            <RefreshCw className={cn('h-3.5 w-3.5', rootLoading && 'animate-spin')} />
+          </Button>
         </div>
       </div>
 

@@ -10,6 +10,8 @@ import {
   Check,
   X,
   Loader2,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -47,6 +49,11 @@ interface FolderBrowserProps {
 export function FolderBrowser({ value, onChange, onClose, showFiles = false }: FolderBrowserProps) {
   const [currentPath, setCurrentPath] = useState(value || '');
   const [manualPath, setManualPath] = useState(value || '');
+  const [showDotfiles, setShowDotfiles] = useState(() => {
+    // Load preference from localStorage
+    const stored = localStorage.getItem('folderBrowser.showDotfiles');
+    return stored ? stored === 'true' : false;
+  });
 
   // Fetch home directory info
   const { data: homeInfo } = useQuery({
@@ -91,6 +98,11 @@ export function FolderBrowser({ value, onChange, onClose, showFiles = false }: F
     }
   }, [homeInfo, value, currentPath]);
 
+  // Save dotfiles preference to localStorage
+  useEffect(() => {
+    localStorage.setItem('folderBrowser.showDotfiles', showDotfiles.toString());
+  }, [showDotfiles]);
+
   const navigateTo = (path: string) => {
     setCurrentPath(path);
     setManualPath(path);
@@ -130,8 +142,16 @@ export function FolderBrowser({ value, onChange, onClose, showFiles = false }: F
     }
   };
 
-  const directories = contents?.files.filter(f => f.type === 'directory') || [];
-  const files = showFiles ? contents?.files.filter(f => f.type === 'file') || [] : [];
+  const directories = contents?.files.filter(f => {
+    if (f.type !== 'directory') return false;
+    if (!showDotfiles && f.name.startsWith('.')) return false;
+    return true;
+  }) || [];
+  const files = showFiles ? contents?.files.filter(f => {
+    if (f.type !== 'file') return false;
+    if (!showDotfiles && f.name.startsWith('.')) return false;
+    return true;
+  }) || [] : [];
 
   const pathParts = currentPath.split('/').filter(Boolean);
 
@@ -141,6 +161,19 @@ export function FolderBrowser({ value, onChange, onClose, showFiles = false }: F
       <div className="flex items-center gap-2 p-3 border-b bg-muted/30">
         <span className="text-sm font-medium">Select Folder</span>
         <div className="flex-1" />
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={() => setShowDotfiles(!showDotfiles)}
+          title={showDotfiles ? 'Hide dotfiles' : 'Show dotfiles'}
+        >
+          {showDotfiles ? (
+            <Eye className="h-4 w-4" />
+          ) : (
+            <EyeOff className="h-4 w-4" />
+          )}
+        </Button>
         {onClose && (
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
             <X className="h-4 w-4" />
