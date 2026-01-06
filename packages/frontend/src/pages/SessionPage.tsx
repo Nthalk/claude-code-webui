@@ -165,8 +165,8 @@ export function SessionPage() {
   useDocumentSwipeGesture({
     onSwipeLeft: handleSwipeLeft,
     onSwipeRight: handleSwipeRight,
-    threshold: 50,
-    velocityThreshold: 0.25,
+    threshold: 30, // Reduced from 50 for more sensitivity
+    velocityThreshold: 0.15, // Reduced from 0.25 for easier triggering
     enabled: true,
   });
 

@@ -148,12 +148,15 @@ export function useDocumentSwipeGesture(config: SwipeConfig) {
       const touch = e.touches[0];
       if (!touch) return;
 
-      // Only start tracking at screen edges for sidebar reveal
-      const edgeThreshold = 30;
-      const isLeftEdge = touch.clientX < edgeThreshold;
-      const isRightEdge = touch.clientX > window.innerWidth - edgeThreshold;
+      // Don't track swipes on interactive elements
+      const target = e.target as HTMLElement;
+      const isInteractive = target.tagName === 'INPUT' ||
+                          target.tagName === 'TEXTAREA' ||
+                          target.tagName === 'BUTTON' ||
+                          target.tagName === 'A' ||
+                          target.getAttribute('contenteditable') === 'true';
 
-      if (!isLeftEdge && !isRightEdge) return;
+      if (isInteractive) return;
 
       touchState.current = {
         startX: touch.clientX,
