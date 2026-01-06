@@ -33,49 +33,13 @@ import {GrepToolRenderer} from './GrepToolRenderer';
 import {WebSearchToolRenderer} from './WebSearchToolRenderer';
 import {ReadToolRenderer} from './ReadToolRenderer';
 import {PlanRenderer} from './PlanRenderer';
+import {stripWorkingDirectory} from '@/lib/utils';
 
 interface ToolExecutionCardProps {
     execution: ToolExecution;
+    workingDirectory?: string;
 }
 
-// Smart path truncation: /first-dir/.../parent-dir/.../filename
-// Shows first dir, ..., one parent dir near file, ..., filename
-const truncatePath = (path: string, maxLength: number = 45): string => {
-    if (path.length <= maxLength) return path;
-
-    const hasLeadingSlash = path.startsWith('/');
-    const parts = path.split('/').filter(p => p !== '');
-
-    if (parts.length <= 3) {
-        // Short path - just truncate from end
-        return '...' + path.slice(-(maxLength - 3));
-    }
-
-    const firstDir = parts[0] || '';
-    const parentDir = parts[parts.length - 2] || '';
-    const fileName = parts[parts.length - 1] || '';
-
-    if (!firstDir || !fileName) {
-        return '...' + path.slice(-(maxLength - 3));
-    }
-
-    // Format: /firstDir/.../parentDir/.../fileName
-    const prefix = hasLeadingSlash ? '/' : '';
-    const truncated = `${prefix}${firstDir}/.../` + (parentDir ? `${parentDir}/.../` : '') + fileName;
-
-    if (truncated.length <= maxLength) {
-        return truncated;
-    }
-
-    // Too long even with parent - skip parent dir
-    const shortTruncated = `${prefix}${firstDir}/.../` + fileName;
-    if (shortTruncated.length <= maxLength) {
-        return shortTruncated;
-    }
-
-    // Still too long - just show end
-    return '...' + path.slice(-(maxLength - 3));
-};
 
 // Map tool names to icons and labels
 const getToolDisplay = (toolName: string): { icon: typeof Wrench; label: string; inputLabel: string } => {
@@ -98,7 +62,7 @@ const getToolDisplay = (toolName: string): { icon: typeof Wrench; label: string;
 };
 
 // Extract description and command/detail for two-line preview
-const getInputPreviewTwoLine = (toolName: string, input: unknown): { description: string; detail: string } => {
+const getInputPreviewTwoLine = (toolName: string, input: unknown, workingDirectory?: string): { description: string; detail: string } => {
     if (!input) return {description: '', detail: ''};
     if (typeof input === 'string') return {description: '', detail: input};
 
@@ -114,17 +78,17 @@ const getInputPreviewTwoLine = (toolName: string, input: unknown): { description
         case 'Write':
             return {
                 description: '',
-                detail: truncatePath(String(inputObj.file_path || ''), 45),
+                detail: stripWorkingDirectory(String(inputObj.file_path || ''), workingDirectory),
             };
         case 'Edit':
             return {
                 description: '',
-                detail: truncatePath(String(inputObj.file_path || ''), 45),
+                detail: stripWorkingDirectory(String(inputObj.file_path || ''), workingDirectory),
             };
         case 'Glob':
             return {
                 description: '',
-                detail: truncatePath(String(inputObj.pattern || ''), 45),
+                detail: String(inputObj.pattern || ''),
             };
         case 'Grep':
             return {
@@ -274,7 +238,7 @@ const parseInput = (input: unknown): unknown => {
     return input;
 };
 
-export function ToolExecutionCard({execution}: ToolExecutionCardProps) {
+export function ToolExecutionCard({execution, workingDirectory}: ToolExecutionCardProps) {
     const [expanded, setExpanded] = useState(false);
     const {icon: Icon, label} = getToolDisplay(execution.toolName);
 
@@ -287,7 +251,7 @@ export function ToolExecutionCard({execution}: ToolExecutionCardProps) {
     const isClickable = isExpandable; // Allow expansion even when started
 
     // Get two-line preview (description + detail)
-    const {description, detail} = getInputPreviewTwoLine(execution.toolName, parsedInput);
+    const {description, detail} = getInputPreviewTwoLine(execution.toolName, parsedInput, workingDirectory);
     const formattedInput = formatInput(execution.toolName, parsedInput);
 
     return (
@@ -335,6 +299,7 @@ export function ToolExecutionCard({execution}: ToolExecutionCardProps) {
                             oldString={String((parsedInput as EditToolInput).old_string || '')}
                             newString={String((parsedInput as EditToolInput).new_string || '')}
                             filePath={String((parsedInput as EditToolInput).file_path || '')}
+                            workingDirectory={workingDirectory}
                         />
                     ) : execution.toolName === 'Bash' && parsedInput && typeof parsedInput === 'object' ? (
                         <BashToolRenderer
@@ -359,6 +324,7 @@ export function ToolExecutionCard({execution}: ToolExecutionCardProps) {
                             input={parsedInput as ReadToolInput}
                             result={execution.result}
                             error={execution.error}
+                            workingDirectory={workingDirectory}
                         />
                     ) : execution.toolName === 'Task' && parsedInput && typeof parsedInput === 'object' ? (
                         <PlanRenderer

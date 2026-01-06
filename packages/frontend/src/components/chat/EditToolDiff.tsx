@@ -1,9 +1,11 @@
 import React from 'react';
+import { stripWorkingDirectory } from '@/lib/utils';
 
 interface EditToolDiffProps {
   oldString: string;
   newString: string;
   filePath?: string;
+  workingDirectory?: string;
   className?: string;
 }
 
@@ -67,9 +69,11 @@ export const EditToolDiff: React.FC<EditToolDiffProps> = ({
   oldString,
   newString,
   filePath,
+  workingDirectory,
   className = ''
 }) => {
   const changes = computeSimpleDiff(oldString, newString);
+  const displayPath = filePath ? stripWorkingDirectory(filePath, workingDirectory) : undefined;
 
   // Count changes for summary
   const stats = changes.reduce((acc, change) => {
@@ -80,11 +84,11 @@ export const EditToolDiff: React.FC<EditToolDiffProps> = ({
 
   return (
     <div className={`font-mono text-xs ${className}`}>
-      {filePath && (
+      {displayPath && (
         <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 border-b border-gray-200 dark:border-gray-700">
           <span className="font-semibold flex-shrink-0">File:</span>
           <span className="overflow-x-auto whitespace-nowrap scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent">
-            {filePath}
+            {displayPath}
           </span>
         </div>
       )}

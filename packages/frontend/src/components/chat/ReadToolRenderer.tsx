@@ -2,12 +2,14 @@ import React from 'react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { getLanguageFromPath } from '@/components/code-editor/language-map';
+import { stripWorkingDirectory } from '@/lib/utils';
 import type { ReadToolInput } from '@claude-code-webui/shared';
 
 interface ReadToolRendererProps {
   input: ReadToolInput;
   result?: string;
   error?: string;
+  workingDirectory?: string;
 }
 
 // Map Monaco language IDs to Prism language IDs where they differ
@@ -31,8 +33,10 @@ export const ReadToolRenderer: React.FC<ReadToolRendererProps> = ({
   input,
   result,
   error,
+  workingDirectory,
 }) => {
   const filePath = input.file_path || '';
+  const displayPath = stripWorkingDirectory(filePath, workingDirectory);
   const monacoLang = getLanguageFromPath(filePath);
   const prismLang = monacoToPrismLanguage[monacoLang] || monacoLang;
 
@@ -47,7 +51,7 @@ export const ReadToolRenderer: React.FC<ReadToolRendererProps> = ({
       <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 rounded-t border border-gray-200 dark:border-gray-700">
         <span className="font-semibold flex-shrink-0 text-xs">File:</span>
         <span className="overflow-x-auto whitespace-nowrap scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent text-xs font-mono">
-          {filePath}
+          {displayPath}
         </span>
         {hasLineRange && (
           <span className="ml-auto flex-shrink-0 text-xs opacity-70">

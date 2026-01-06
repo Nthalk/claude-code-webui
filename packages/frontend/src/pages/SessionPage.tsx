@@ -102,6 +102,10 @@ export function SessionPage() {
   const [isDragging, setIsDragging] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [sessionMode, setSessionMode] = useState<SessionMode>('auto-accept');
+  const [isChangingMode, setIsChangingMode] = useState(false);
+  const [isChangingModel, setIsChangingModel] = useState(false);
+  const [targetMode, setTargetMode] = useState<SessionMode | undefined>();
+  const [targetModel, setTargetModel] = useState<ModelType | undefined>();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
@@ -136,6 +140,7 @@ export function SessionPage() {
   const openFiles = useSessionStore((state) => state.openFiles);
   const usage = useSessionStore((state) => state.usage);
   const mobileView = useSessionStore((state) => state.mobileView);
+  const sessions = useSessionStore((state) => state.sessions);
 
   // Actions are stable references in Zustand - get them individually to avoid creating new objects
   const setMessages = useSessionStore((state) => state.setMessages);
@@ -526,6 +531,63 @@ export function SessionPage() {
     }
   }, [mobileView, setRightPanelTab]);
 
+  // Listen for model/mode change events
+  useEffect(() => {
+    const socket = socketService.getSocket();
+    if (!socket || !id) return;
+
+    const handleModelChanging = (data: { sessionId: string; from: ModelType; to: ModelType }) => {
+      if (data.sessionId === id) {
+        setIsChangingModel(true);
+        setTargetModel(data.to);
+      }
+    };
+
+    const handleModeChanging = (data: { sessionId: string; from: SessionMode; to: SessionMode }) => {
+      if (data.sessionId === id) {
+        setIsChangingMode(true);
+        setTargetMode(data.to);
+      }
+    };
+
+    const handleModelChanged = (data: { sessionId: string; model: ModelType }) => {
+      if (data.sessionId === id) {
+        setIsChangingModel(false);
+        setTargetModel(undefined);
+        // Model is already reflected in usage data
+      }
+    };
+
+    const handleModeChanged = (data: { sessionId: string; mode: SessionMode }) => {
+      if (data.sessionId === id) {
+        setIsChangingMode(false);
+        setTargetMode(undefined);
+        setSessionMode(data.mode);
+      }
+    };
+
+    socket.on('session:model_changing', handleModelChanging);
+    socket.on('session:mode_changing', handleModeChanging);
+    socket.on('session:model_changed', handleModelChanged);
+    socket.on('session:mode_changed', handleModeChanged);
+
+    return () => {
+      socket.off('session:model_changing', handleModelChanging);
+      socket.off('session:mode_changing', handleModeChanging);
+      socket.off('session:model_changed', handleModelChanged);
+      socket.off('session:mode_changed', handleModeChanged);
+    };
+  }, [id]);
+
+  // Load mode from session data when sessions are loaded
+  useEffect(() => {
+    if (!id || sessions.length === 0) return;
+    const currentSession = sessions.find(s => s.id === id);
+    if (currentSession && 'mode' in currentSession) {
+      setSessionMode(currentSession.mode as SessionMode);
+    }
+  }, [id, sessions]);
+
   const addImages = useCallback((files: File[]) => {
     const imageFiles = files.filter(file => file.type.startsWith('image/'));
     const maxImages = 5;
@@ -754,17 +816,22 @@ export function SessionPage() {
   };
 
   const handleModeChange = useCallback((newMode: SessionMode) => {
-    setSessionMode(newMode);
+    if (isChangingMode) return; // Prevent changes while another is in progress
+    setTargetMode(newMode);
+    setIsChangingMode(true);
     if (id) {
       socketService.setSessionMode(id, newMode);
     }
-  }, [id]);
+  }, [id, isChangingMode]);
 
   const handleModelChange = useCallback((newModel: ModelType) => {
+    if (isChangingModel) return; // Prevent changes while another is in progress
+    setTargetModel(newModel);
+    setIsChangingModel(true);
     if (id) {
       socketService.setSessionModel(id, newModel);
     }
-  }, [id]);
+  }, [id, isChangingModel]);
 
   const handlePermissionResponse = useCallback(async (action: PermissionAction, pattern?: string, reason?: string) => {
     if (!id || !currentPendingPermission) return;
@@ -948,6 +1015,10 @@ export function SessionPage() {
               weeklyAllModels={usageLimits?.weeklyAll}
               weeklySonnet={usageLimits?.weeklySonnet}
               variant="mobile"
+              isChangingMode={isChangingMode}
+              isChangingModel={isChangingModel}
+              targetMode={targetMode}
+              targetModel={targetModel}
             />
           </div>
         </div>
@@ -996,6 +1067,10 @@ export function SessionPage() {
               sessionLimit={usageLimits?.session}
               weeklyAllModels={usageLimits?.weeklyAll}
               weeklySonnet={usageLimits?.weeklySonnet}
+              isChangingMode={isChangingMode}
+              isChangingModel={isChangingModel}
+              targetMode={targetMode}
+              targetModel={targetModel}
             />
 
             {/* CLI Tool selector - desktop only */}
@@ -1364,7 +1439,7 @@ export function SessionPage() {
             const exec = item.data;
             return (
               <div key={`tool-${exec.toolId}`} className="flex justify-start animate-fade-in w-full">
-                <ToolExecutionCard execution={exec} />
+                <ToolExecutionCard execution={exec} workingDirectory={session?.workingDirectory} />
               </div>
             );
           }
