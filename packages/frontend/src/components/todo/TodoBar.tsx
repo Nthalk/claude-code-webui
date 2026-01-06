@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { CheckCircle2, Circle, ChevronDown, ChevronUp } from 'lucide-react';
 import type { TodoItem } from '@/stores/sessionStore';
 import { cn } from '@/lib/utils';
@@ -9,6 +9,29 @@ interface TodoBarProps {
 
 export function TodoBar({ todos }: TodoBarProps) {
   const [isExpanded, setIsExpanded] = useState(false);
+
+  // Check sidebar collapsed state from localStorage
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    const saved = localStorage.getItem('sidebar-left-collapsed');
+    return saved === 'true';
+  });
+
+  // Listen for storage changes to sync sidebar state
+  useEffect(() => {
+    const handleStorageChange = () => {
+      const saved = localStorage.getItem('sidebar-left-collapsed');
+      setSidebarCollapsed(saved === 'true');
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    // Also listen to custom event for same-window updates
+    window.addEventListener('sidebar-collapsed-changed', handleStorageChange);
+
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('sidebar-collapsed-changed', handleStorageChange);
+    };
+  }, []);
 
   // Get the current todo and filter todos
   const currentTodo = todos.find(todo => todo.status === 'in_progress') || todos.find(todo => todo.status === 'pending');
@@ -23,7 +46,13 @@ export function TodoBar({ todos }: TodoBarProps) {
   return (
     <>
       {/* Floating bar */}
-      <div className="fixed top-0 left-0 right-0 z-50 pointer-events-none">
+      <div className={cn(
+        "fixed top-0 right-0 z-40 pointer-events-none",
+        // On mobile, full width
+        "left-0",
+        // On desktop, respect sidebar width
+        sidebarCollapsed ? "md:left-16" : "md:left-64"
+      )}>
         <div
           className={cn(
             "bg-blue-500/90 backdrop-blur-sm text-white px-4 py-2 cursor-pointer pointer-events-auto",
@@ -55,7 +84,10 @@ export function TodoBar({ todos }: TodoBarProps) {
 
         {/* Expanded todo list */}
         {isExpanded && (
-          <div className="bg-white dark:bg-gray-900 border-b shadow-xl pointer-events-auto">
+          <div className={cn(
+            "bg-white dark:bg-gray-900 border-b shadow-xl pointer-events-auto",
+            "transition-all duration-300"
+          )}>
             <div className="max-w-screen-xl mx-auto p-4">
               {/* Active/Pending todos */}
               {incompleteTodos.length > 0 && (

@@ -43,6 +43,8 @@ export function Sidebar({ onNavigate, mobile, rightPanelTab, onRightPanelTabChan
   const setCollapsed = useCallback((value: boolean) => {
     localStorage.setItem('sidebar-left-collapsed', String(value));
     setCollapsedState(value);
+    // Dispatch custom event for same-window listeners
+    window.dispatchEvent(new Event('sidebar-collapsed-changed'));
   }, []);
 
   const [showStarredOnly, setShowStarredOnly] = useState(false);
