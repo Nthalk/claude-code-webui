@@ -80,7 +80,7 @@ export function AssistantMessage({
       <div className="flex w-full justify-start">
         <Card
           className={cn(
-            'p-2 md:p-3 cursor-pointer select-none max-w-[calc(100vw-2rem)] md:max-w-none overflow-hidden',
+            'p-2 md:p-3 cursor-pointer max-w-[calc(100vw-2rem)] md:max-w-none overflow-hidden',
             'bg-card rounded-bl-sm'
           )}
           onClick={() => onTimestampClick(isTimestampVisible ? null : message.id)}

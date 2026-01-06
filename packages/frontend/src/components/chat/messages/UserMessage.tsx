@@ -71,7 +71,7 @@ export function UserMessage({ message, sessionId, isTimestampVisible, onTimestam
       <div className="flex w-full justify-end">
         <Card
           className={cn(
-            'p-2 md:p-3 cursor-pointer select-none max-w-[calc(100vw-2rem)] md:max-w-none overflow-hidden',
+            'p-2 md:p-3 cursor-pointer max-w-[calc(100vw-2rem)] md:max-w-none overflow-hidden',
             'bg-primary text-primary-foreground rounded-br-sm border-primary',
             message.isPending && 'opacity-70'
           )}
