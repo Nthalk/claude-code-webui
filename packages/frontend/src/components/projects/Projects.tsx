@@ -56,6 +56,7 @@ export function Projects() {
   const queryClient = useQueryClient();
   const [isExpanded, setIsExpanded] = useState(true);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
+  const [initialExpanded, setInitialExpanded] = useState(false);
 
   // Fetch all projects
   const { data: projects, isLoading, refetch, isRefetching } = useQuery({
@@ -63,7 +64,18 @@ export function Projects() {
     queryFn: async () => {
       const response = await api.get<ApiResponse<Project[]>>('/api/projects');
       if (response.data.success && response.data.data) {
-        return response.data.data;
+        const projectData = response.data.data;
+
+        // Auto-expand if there's only one project with sessions
+        if (!initialExpanded && projectData.length === 1 && projectData[0].sessionCount && projectData[0].sessionCount > 0) {
+          setInitialExpanded(true);
+          // Use setTimeout to ensure the component has rendered
+          setTimeout(() => {
+            toggleProject(projectData[0].id, true);
+          }, 0);
+        }
+
+        return projectData;
       }
       return [];
     },
@@ -93,9 +105,32 @@ export function Projects() {
     },
   });
 
-  const toggleProject = async (projectId: string) => {
+  const toggleProject = async (projectId: string, forceExpand?: boolean) => {
     const project = projects?.find(p => p.id === projectId);
-    if (!project || !project.sessionCount || project.sessions) {
+    if (!project) return;
+
+    // If forceExpand is true, ensure we expand and load data
+    if (forceExpand) {
+      if (!project.sessions && project.sessionCount && project.sessionCount > 0) {
+        // Fetch detailed project data with sessions
+        try {
+          const response = await api.get<ApiResponse<Project>>(`/api/projects/${projectId}`);
+          if (response.data.success && response.data.data) {
+            queryClient.setQueryData(['projects'], (old: Project[] | undefined) => {
+              if (!old) return old;
+              return old.map(p => p.id === projectId ? response.data.data! : p);
+            });
+          }
+        } catch (error) {
+          toast({ title: 'Error', description: 'Failed to load project details', variant: 'destructive' });
+        }
+      }
+      setExpandedProjects(prev => new Set(prev).add(projectId));
+      return;
+    }
+
+    // Normal toggle behavior
+    if (!project.sessionCount || project.sessions) {
       // Toggle expansion only
       setExpandedProjects(prev => {
         const newSet = new Set(prev);
@@ -111,12 +146,10 @@ export function Projects() {
       try {
         const response = await api.get<ApiResponse<Project>>(`/api/projects/${projectId}`);
         if (response.data.success && response.data.data) {
-          // Update the projects list with the detailed data
           queryClient.setQueryData(['projects'], (old: Project[] | undefined) => {
             if (!old) return old;
             return old.map(p => p.id === projectId ? response.data.data! : p);
           });
-          // Expand the project
           setExpandedProjects(prev => new Set(prev).add(projectId));
         }
       } catch (error) {
@@ -233,58 +266,85 @@ export function Projects() {
                       </div>
                     </div>
 
-                    {/* Action button */}
-                    <Button
-                      size="sm"
-                      variant="default"
-                      disabled={createMutation.isPending}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        createMutation.mutate(project);
-                      }}
-                      className="shrink-0"
-                    >
-                      <Plus className="h-3 w-3 mr-1" />
-                      {createMutation.isPending ? 'Creating...' : 'New Session'}
-                    </Button>
                   </div>
 
                   {/* Sessions list */}
-                  {expandedProjects.has(project.id) && project.sessions && project.sessions.length > 0 && (
+                  {expandedProjects.has(project.id) && project.sessions && (
                     <div className="mt-3 pl-6 space-y-2 border-l-2 border-muted ml-2">
-                      {project.sessions.map((session) => (
-                        <div
-                          key={session.id}
-                          className="text-sm p-2 rounded hover:bg-muted/50 cursor-pointer"
-                          onClick={() => navigate(`/session/${session.id}`)}
-                        >
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <FileJson className="h-3 w-3 text-blue-500" />
-                              <span className="font-medium">{session.name}</span>
-                              <span className={cn(
-                                "inline-flex items-center text-xs px-2 py-0.5 rounded",
-                                session.status === 'running' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground'
-                              )}>
-                                {session.status}
-                              </span>
-                              <span className="inline-flex items-center text-xs px-2 py-0.5 rounded border">
-                                <Cpu className="h-3 w-3 mr-1" />
-                                {session.model}
-                              </span>
+                      {project.sessions.length > 0 ? (
+                        <>
+                          {project.sessions.map((session) => (
+                            <div
+                              key={session.id}
+                              className="text-sm p-2 rounded hover:bg-muted/50 cursor-pointer"
+                              onClick={() => navigate(`/session/${session.id}`)}
+                            >
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <FileJson className="h-3 w-3 text-blue-500" />
+                                  <span className="font-medium">{session.name}</span>
+                                  <span className={cn(
+                                    "inline-flex items-center text-xs px-2 py-0.5 rounded",
+                                    session.status === 'running' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground'
+                                  )}>
+                                    {session.status}
+                                  </span>
+                                  <span className="inline-flex items-center text-xs px-2 py-0.5 rounded border">
+                                    <Cpu className="h-3 w-3 mr-1" />
+                                    {session.model}
+                                  </span>
+                                </div>
+                                <span className="text-xs text-muted-foreground">
+                                  {formatRelativeTime(session.updatedAt)}
+                                </span>
+                              </div>
+                              {session.tokenUsage && (
+                                <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
+                                  <span>{formatTokenCount(session.tokenUsage.totalTokens)} tokens</span>
+                                  <span>{formatCost(session.tokenUsage.totalCostUsd)}</span>
+                                </div>
+                              )}
                             </div>
-                            <span className="text-xs text-muted-foreground">
-                              {formatRelativeTime(session.updatedAt)}
-                            </span>
+                          ))}
+
+                          {/* Resume Last Session / New Session button */}
+                          <div className="pt-2 flex justify-center">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={createMutation.isPending}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                // Navigate to the most recent session
+                                if (project.sessions[0]) {
+                                  navigate(`/session/${project.sessions[0].id}`);
+                                }
+                              }}
+                              className="w-full max-w-[200px]"
+                            >
+                              <ChevronRight className="h-3 w-3 mr-1" />
+                              Resume Last Session
+                            </Button>
                           </div>
-                          {session.tokenUsage && (
-                            <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                              <span>{formatTokenCount(session.tokenUsage.totalTokens)} tokens</span>
-                              <span>{formatCost(session.tokenUsage.totalCostUsd)}</span>
-                            </div>
-                          )}
+                        </>
+                      ) : (
+                        // No sessions - show new session button
+                        <div className="text-center py-3">
+                          <p className="text-xs text-muted-foreground mb-2">No sessions yet</p>
+                          <Button
+                            size="sm"
+                            variant="default"
+                            disabled={createMutation.isPending}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              createMutation.mutate(project);
+                            }}
+                          >
+                            <Plus className="h-3 w-3 mr-1" />
+                            {createMutation.isPending ? 'Creating...' : 'Create First Session'}
+                          </Button>
                         </div>
-                      ))}
+                      )}
                     </div>
                   )}
                 </div>
