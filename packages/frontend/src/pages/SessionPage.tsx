@@ -122,10 +122,22 @@ export function SessionPage() {
   const [showProjectSettings, setShowProjectSettings] = useState(false);
   const { settings: themeSettings, updateDesktopFont, updateDesktopSize, updateMobileFont, updateMobileSize } = useTheme();
 
+  // Get open files early for mobile view order
+  const currentOpenFiles = openFiles[id || ''] || [];
+  const hasOpenFiles = currentOpenFiles.length > 0;
+
   // Mobile swipe gesture navigation
   const mobileViewOrder = useMemo((): MobileView[] => {
-    return ['files', 'chat', 'git', 'debug'];
-  }, []);
+    const views: MobileView[] = ['files', 'chat'];
+
+    // Include editor if there are open files
+    if (hasOpenFiles) {
+      views.push('editor');
+    }
+
+    views.push('git', 'debug');
+    return views;
+  }, [hasOpenFiles]);
 
   const handleSwipeLeft = useCallback(() => {
     // Only work on mobile (screen width < 768px)
@@ -227,8 +239,6 @@ export function SessionPage() {
 
   const [mainView, setMainView] = useState<'chat' | 'editor'>('chat');
   const currentSelectedFile = selectedFile[id || ''];
-  const currentOpenFiles = openFiles[id || ''] || [];
-  const hasOpenFiles = currentOpenFiles.length > 0;
 
   // State for how many messages to show
   const [messagesToShow, setMessagesToShow] = useState(50);
@@ -476,8 +486,6 @@ export function SessionPage() {
   useEffect(() => {
     if (mobileView === 'git') {
       setRightPanelTab('git');
-    } else if (mobileView === 'todos') {
-      setRightPanelTab('todos');
     } else if (mobileView === 'files') {
       setRightPanelTab('files');
     } else if (mobileView === 'debug') {
@@ -1133,8 +1141,8 @@ export function SessionPage() {
         {/* Main Content - Chat or Editor (hidden on mobile for files/git/todos views) */}
         <div className={cn(
           "flex-1 min-h-0 overflow-hidden relative",
-          // Mobile: hide for files, git, todos, debug views
-          (mobileView === 'files' || mobileView === 'git' || mobileView === 'todos' || mobileView === 'debug') && "hidden md:block"
+          // Mobile: hide for files, git, debug views
+          (mobileView === 'files' || mobileView === 'git' || mobileView === 'debug') && "hidden md:block"
         )}>
         {mainView === 'editor' ? (
           <EditorPanel sessionId={id || ''} />
@@ -1253,8 +1261,8 @@ export function SessionPage() {
           <div className={cn(
             "shrink-0 w-72 transition-all duration-200",
             // Mobile: hide unless mobileView matches
-            (mobileView !== 'git' && mobileView !== 'todos' && mobileView !== 'files' && mobileView !== 'debug') && "hidden md:block",
-            (mobileView === 'git' || mobileView === 'todos' || mobileView === 'files' || mobileView === 'debug') && "md:block w-full md:w-72"
+            (mobileView !== 'git' && mobileView !== 'files' && mobileView !== 'debug') && "hidden md:block",
+            (mobileView === 'git' || mobileView === 'files' || mobileView === 'debug') && "md:block w-full md:w-72"
           )}>
             <Card className="h-full flex flex-col bg-card/50 backdrop-blur-sm border">
               {/* Panel Header */}
@@ -1285,7 +1293,15 @@ export function SessionPage() {
                     workingDirectory={session.workingDirectory}
                     selectedFile={currentSelectedFile || null}
                     onFileSelect={(path) => id && setSelectedFile(id, path)}
-                    onFileOpen={(path, content) => id && openFileInStore(id, path, content)}
+                    onFileOpen={(path, content) => {
+                      if (id) {
+                        openFileInStore(id, path, content);
+                        // Switch to editor view on mobile when opening a file
+                        if (window.innerWidth < 768) {
+                          setMobileView('editor');
+                        }
+                      }
+                    }}
                     className="h-full"
                   />
                 )}

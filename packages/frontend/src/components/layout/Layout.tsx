@@ -24,7 +24,6 @@ export function Layout() {
     setRightPanelTab(tab);
     // Sync mobile view when changing panel tab
     if (tab === 'files') setMobileView('files');
-    else if (tab === 'todos') setMobileView('todos');
     else if (tab === 'git') setMobileView('git');
     else if (tab === 'debug') setMobileView('debug');
     else setMobileView('chat'); // If closing panel, go back to chat

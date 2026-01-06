@@ -70,8 +70,8 @@ interface SessionState {
   setRightPanelTab: (tab: 'files' | 'todos' | 'git' | 'debug' | null) => void;
 
   // Mobile view state (for session pages)
-  mobileView: 'chat' | 'files' | 'git' | 'editor' | 'todos' | 'debug';
-  setMobileView: (view: 'chat' | 'files' | 'git' | 'editor' | 'todos' | 'debug') => void;
+  mobileView: 'chat' | 'files' | 'git' | 'editor' | 'debug';
+  setMobileView: (view: 'chat' | 'files' | 'git' | 'editor' | 'debug') => void;
 
   // Mobile menu state (shared between Layout and SessionPage)
   mobileMenuOpen: boolean;

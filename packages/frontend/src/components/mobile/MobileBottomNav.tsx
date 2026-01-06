@@ -1,31 +1,26 @@
-import { MessageSquare, FolderTree, GitBranch, Code2, ListTodo, Bug } from 'lucide-react';
+import { MessageSquare, FolderTree, GitBranch, Code2, Bug } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type MobileView = 'chat' | 'files' | 'git' | 'editor' | 'todos' | 'debug';
+export type MobileView = 'chat' | 'files' | 'git' | 'editor' | 'debug';
 
 interface MobileBottomNavProps {
   activeView: MobileView;
   onViewChange: (view: MobileView) => void;
   hasOpenFiles?: boolean;
-  hasTodos?: boolean;
   changesCount?: number;
-  todosCount?: number;
 }
 
 export function MobileBottomNav({
   activeView,
   onViewChange,
   hasOpenFiles = false,
-  hasTodos = false,
   changesCount = 0,
-  todosCount = 0,
 }: MobileBottomNavProps) {
   const navItems: { id: MobileView; icon: React.ElementType; label: string; badge?: number; show?: boolean }[] = [
     { id: 'chat', icon: MessageSquare, label: 'Chat' },
     { id: 'files', icon: FolderTree, label: 'Files' },
     { id: 'git', icon: GitBranch, label: 'Git', badge: changesCount > 0 ? changesCount : undefined },
     { id: 'editor', icon: Code2, label: 'Editor', show: hasOpenFiles },
-    { id: 'todos', icon: ListTodo, label: 'Todos', badge: todosCount > 0 ? todosCount : undefined, show: hasTodos },
     { id: 'debug', icon: Bug, label: 'Debug' },
   ];
 
