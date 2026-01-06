@@ -58,7 +58,7 @@ router.get('/', requireAuth, (req, res) => {
       `SELECT id, user_id as userId, name, working_directory as workingDirectory,
               claude_session_id as claudeSessionId, status,
               COALESCE(session_state, 'inactive') as sessionState,
-              last_message as lastMessage,
+              last_message as lastMessage, model, mode,
               starred, created_at as createdAt, updated_at as updatedAt
        FROM sessions WHERE user_id = ? ORDER BY starred DESC, updated_at DESC`
     )
@@ -79,7 +79,7 @@ router.get('/:id', requireAuth, (req, res) => {
       `SELECT id, user_id as userId, name, working_directory as workingDirectory,
               claude_session_id as claudeSessionId, status,
               COALESCE(session_state, 'inactive') as sessionState,
-              last_message as lastMessage,
+              last_message as lastMessage, model, mode,
               starred, created_at as createdAt, updated_at as updatedAt
        FROM sessions WHERE id = ? AND user_id = ?`
     )

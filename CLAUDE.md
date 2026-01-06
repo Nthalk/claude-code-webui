@@ -1,5 +1,12 @@
 # Claude Code Web UI
 
+## Rules
+
+- **STAY IN PROJECT ROOT**: NEVER change directories unnecessarily. You should be able to run any command from the project root.
+- Keep it short and high signal, don't waste time agreeing or complementing me, focus on the task at hand! (no "Good!", "You are right!")
+- Do not agree with me without checking first - when I say something surprising, verify it before agreeing!
+- Continue batch operations until done unless asking for input
+
 ## Project Behavior Guidelines
 
 ### Code Style
@@ -11,10 +18,11 @@
 
 ### Development Practices
 - Always run `pnpm typecheck` before considering done
-- Test changes with `pnpm dev` running
+- Test changes with `scripts/start-webui.sh` running (it might be running, and it has a `--restart` flag, but should auto reload on changes)
 - Preserve existing functionality when refactoring
 - Keep commits focused on single concerns
 - Use descriptive variable/function names
+- Use conventional commit messages
 
 ### Architecture Decisions
 - WebSocket for real-time updates, REST for CRUD
@@ -37,14 +45,11 @@
 
 ## Quick Reference
 ```bash
-pnpm dev          # Start development
-pnpm typecheck    # Check types
+pnpm typecheck    # Check types (does both frontend and backend)
 pnpm build        # Production build
 
 # Restart backend (when using scripts/start-webui.sh)
 scripts/start-webui.sh --restart  # From another terminal
-# OR
-kill -USR1 <script-pid>           # Using the PID shown at startup
 ```
 
 ### Backend Restart
@@ -52,9 +57,4 @@ When running with `scripts/start-webui.sh`, you can restart just the backend ser
 - Making backend code changes that need a reload
 - Backend crashes and needs recovery
 - Clearing in-memory state while keeping UI sessions intact
-
-Two ways to restart:
-1. **From another terminal**: `scripts/start-webui.sh --restart`
-2. **Using signal**: `kill -USR1 <pid>` (PID is shown at startup)
-
-The frontend remains running, preserving user sessions and UI state. The script writes its own PID to `.pids/start-webui.pid` for easy access.
+- UI sessions RELOAD on backend restart

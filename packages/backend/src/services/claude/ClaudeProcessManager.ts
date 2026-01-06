@@ -355,7 +355,8 @@ export class ClaudeProcessManager {
             .get(sessionId, userId) as {
             working_directory: string;
             claude_session_id: string | null;
-            model?: string
+            model?: string;
+            mode?: string;
         } | undefined;
 
         if (!session) {
@@ -366,8 +367,8 @@ export class ClaudeProcessManager {
             return;
         }
 
-        // Use provided mode, or pending mode, or default to 'auto-accept'
-        const effectiveMode = mode ?? this.pendingModes.get(sessionId) ?? 'auto-accept';
+        // Use provided mode, or pending mode, or session's stored mode, or default to 'auto-accept'
+        const effectiveMode = mode ?? this.pendingModes.get(sessionId) ?? (session.mode as SessionMode) ?? 'auto-accept';
         this.pendingModes.delete(sessionId); // Clear pending mode once used
         console.log(`[MODE] Starting session ${sessionId} with mode ${effectiveMode}`);
 
@@ -1874,6 +1875,13 @@ This is the project you should be working on. All file operations should be rela
     // Set permission mode for a session
     setMode(sessionId: string, userId: string, mode: SessionMode): void {
         const proc = this.processes.get(sessionId);
+        const db = getDatabase();
+
+        // Update the mode in the database
+        db.prepare('UPDATE sessions SET mode = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
+            mode,
+            sessionId
+        );
 
         // If no process running, store the mode for when it starts
         if (!proc) {
@@ -1892,6 +1900,13 @@ This is the project you should be working on. All file operations should be rela
         }
 
         console.log(`[MODE] Changing session ${sessionId} from ${proc.mode} to ${mode}`);
+
+        // Emit mode changing event
+        this.io.emit('session:mode_changing', {
+            sessionId,
+            from: proc.mode,
+            to: mode
+        });
 
         // Store the new mode
         const previousMode = proc.mode;
@@ -1914,6 +1929,11 @@ This is the project you should be working on. All file operations should be rela
             try {
                 await this.startSession(sessionId, userId, mode);
                 console.log(`[MODE] Session ${sessionId} restarted with mode ${mode}`);
+                // Emit mode changed event on success
+                this.io.emit('session:mode_changed', {
+                    sessionId,
+                    mode
+                });
             } catch (err) {
                 console.error(`[MODE] Failed to restart session ${sessionId}:`, err);
                 // Revert mode on failure
@@ -1921,6 +1941,11 @@ This is the project you should be working on. All file operations should be rela
                 if (newProc) {
                     newProc.mode = previousMode;
                 }
+                // Emit mode changed event with reverted mode on failure
+                this.io.emit('session:mode_changed', {
+                    sessionId,
+                    mode: previousMode
+                });
             }
         }, 1000);
     }
@@ -1959,6 +1984,13 @@ This is the project you should be working on. All file operations should be rela
 
         console.log(`[MODEL] Changing session ${sessionId} from ${currentModel} to ${model}`);
 
+        // Emit model changing event
+        this.io.emit('session:model_changing', {
+            sessionId,
+            from: currentModel as ModelType,
+            to: model
+        });
+
         // For model changes on running sessions, we need to restart the process
         // Save any pending streaming content first
         if (proc.streamingText.trim().length > 0) {
@@ -1976,8 +2008,18 @@ This is the project you should be working on. All file operations should be rela
             try {
                 await this.startSession(sessionId, userId, proc.mode, model);
                 console.log(`[MODEL] Session ${sessionId} restarted with model ${model}`);
+                // Emit model changed event on success
+                this.io.emit('session:model_changed', {
+                    sessionId,
+                    model
+                });
             } catch (err) {
                 console.error(`[MODEL] Failed to restart session ${sessionId}:`, err);
+                // Emit model changed event with current model on failure
+                this.io.emit('session:model_changed', {
+                    sessionId,
+                    model: currentModel as ModelType
+                });
             }
         }, 1000);
     }

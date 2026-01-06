@@ -9,6 +9,7 @@ import {
   Sparkles,
   Cpu,
   Rabbit,
+  Loader,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -30,6 +31,10 @@ interface SessionControlsProps {
   weeklyAllModels?: UsageLimitInfo;
   weeklySonnet?: UsageLimitInfo;
   variant?: 'desktop' | 'mobile';
+  isChangingMode?: boolean;
+  isChangingModel?: boolean;
+  targetMode?: SessionMode;
+  targetModel?: ModelType;
 }
 
 const modelConfig: Record<ModelType, {
@@ -441,19 +446,25 @@ function UnifiedDropdown({
   onModeChange,
   modelType,
   onModelChange,
+  isChangingMode,
+  isChangingModel,
+  targetMode,
+  targetModel,
 }: {
   mode: SessionMode;
   onModeChange: (mode: SessionMode) => void;
   modelType: ModelType;
   onModelChange?: (model: ModelType) => void;
+  isChangingMode?: boolean;
+  isChangingModel?: boolean;
+  targetMode?: SessionMode;
+  targetModel?: ModelType;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
   const currentMode = modeConfig[mode];
   const currentModel = modelConfig[modelType];
-  const ModeIcon = currentMode.icon;
-  const ModelIcon = currentModel.icon;
 
   useEffect(() => {
     if (isOpen && buttonRef.current) {
@@ -550,6 +561,16 @@ function UnifiedDropdown({
     document.body
   ) : null;
 
+  // Show loading indicator if changing
+  const isChanging = isChangingMode || isChangingModel;
+  const showTargetModel = isChangingModel && targetModel;
+  const showTargetMode = isChangingMode && targetMode;
+
+  const displayModel = showTargetModel ? modelConfig[targetModel] : currentModel;
+  const displayMode = showTargetMode ? modeConfig[targetMode] : currentMode;
+  const DisplayModelIcon = displayModel.icon;
+  const DisplayModeIcon = displayMode.icon;
+
   return (
     <div className="relative">
       <Button
@@ -559,20 +580,25 @@ function UnifiedDropdown({
         onClick={() => setIsOpen(!isOpen)}
         className={cn(
           'gap-1.5 h-7 px-2',
-          'hover:bg-muted/50'
+          'hover:bg-muted/50',
+          isChanging && 'opacity-70'
         )}
+        disabled={isChanging}
       >
-        <div className="flex items-center gap-1">
-          <ModelIcon className={cn("h-3 w-3", currentModel.color)} />
-          <span className={cn("text-[10px] font-medium", currentModel.color)}>
-            {currentModel.shortLabel}
+        {isChanging && (
+          <Loader className="h-3 w-3 animate-spin absolute left-1" />
+        )}
+        <div className={cn("flex items-center gap-1", isChanging && "ml-3")}>
+          <DisplayModelIcon className={cn("h-3 w-3", displayModel.color, showTargetModel && "animate-pulse")} />
+          <span className={cn("text-[10px] font-medium", displayModel.color, showTargetModel && "animate-pulse")}>
+            {displayModel.shortLabel}
           </span>
         </div>
         <div className="text-[10px] text-muted-foreground">•</div>
         <div className="flex items-center gap-1">
-          <ModeIcon className={cn("h-3 w-3", currentMode.color)} />
-          <span className={cn("text-[10px] font-medium", currentMode.color)}>
-            {currentMode.shortLabel}
+          <DisplayModeIcon className={cn("h-3 w-3", displayMode.color, showTargetMode && "animate-pulse")} />
+          <span className={cn("text-[10px] font-medium", displayMode.color, showTargetMode && "animate-pulse")}>
+            {displayMode.shortLabel}
           </span>
         </div>
         <ChevronDown className={cn('h-2.5 w-2.5 transition-transform', isOpen && 'rotate-180')} />
@@ -591,6 +617,10 @@ export function SessionControls({
   weeklyAllModels,
   weeklySonnet,
   variant = 'desktop',
+  isChangingMode,
+  isChangingModel,
+  targetMode,
+  targetModel,
 }: SessionControlsProps) {
   // Context window data from Claude CLI
   // Clamp context percent to 0-100 range (can be negative when exceeded)
@@ -813,6 +843,10 @@ export function SessionControls({
         onModeChange={onModeChange}
         modelType={currentModelType}
         onModelChange={onModelChange}
+        isChangingMode={isChangingMode}
+        isChangingModel={isChangingModel}
+        targetMode={targetMode}
+        targetModel={targetModel}
       />
 
       {/* Condensed usage stats */}

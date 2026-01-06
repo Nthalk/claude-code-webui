@@ -203,6 +203,10 @@ export interface ServerToClientEvents {
   'session:compacting': (data: { sessionId: string; isCompacting: boolean }) => void;
   'session:compact_boundary': (data: { sessionId: string; metadata: CompactMetadata }) => void;
   'session:command_output': (data: { sessionId: string; output: string }) => void;
+  'session:model_changing': (data: { sessionId: string; from: ModelType; to: ModelType }) => void;
+  'session:mode_changing': (data: { sessionId: string; from: SessionMode; to: SessionMode }) => void;
+  'session:model_changed': (data: { sessionId: string; model: ModelType }) => void;
+  'session:mode_changed': (data: { sessionId: string; mode: SessionMode }) => void;
   'heartbeat': (data: { sessionId: string; status: 'ok' | 'not_found' }) => void;
   'debug:claude:message': (data: { sessionId: string; message: any }) => void;
   'debug:claude:sent': (data: { sessionId: string; message: any }) => void;

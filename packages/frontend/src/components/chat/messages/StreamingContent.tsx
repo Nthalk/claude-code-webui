@@ -252,7 +252,7 @@ function TrustDialog({ path, onResponse }: { path: string; onResponse?: (respons
 
   return (
     <Card className="p-0 overflow-hidden border-2 border-amber-500/30 bg-gradient-to-br from-amber-500/5 to-transparent">
-      <div className="flex items-center gap-3 p-4 bg-amber-500/10 border-b border-amber-500/20">
+      <div className="flex items-center gap-3 p-2 md:p-3 bg-amber-500/10 border-b border-amber-500/20">
         <div className="p-2 rounded-lg bg-amber-500/20">
           <ShieldAlert className="h-5 w-5 text-amber-500" />
         </div>
@@ -262,7 +262,7 @@ function TrustDialog({ path, onResponse }: { path: string; onResponse?: (respons
         </div>
       </div>
 
-      <div className="p-4 space-y-4">
+      <div className="p-2 md:p-3 space-y-4">
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/50 font-mono text-sm">
           <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
           <span className="truncate">{path}</span>
@@ -329,14 +329,14 @@ function SelectionDialog({
 
   return (
     <Card className="max-w-[80%] p-0 overflow-hidden border-2 border-primary/30">
-      <div className="flex items-center gap-3 p-4 bg-primary/10 border-b border-primary/20">
+      <div className="flex items-center gap-3 p-2 md:p-3 bg-primary/10 border-b border-primary/20">
         <div className="p-2 rounded-lg bg-primary/20">
           <AlertTriangle className="h-5 w-5 text-primary" />
         </div>
         <h3 className="font-semibold text-base">{title || 'Select an option'}</h3>
       </div>
 
-      <div className="p-4 space-y-2">
+      <div className="p-2 md:p-3 space-y-2">
         {options.map((option) => {
           const { title: optTitle, description } = parseOption(option.label);
           return (
@@ -371,7 +371,7 @@ function SelectionDialog({
 function WelcomeScreen({ data }: { data: { version: string; model: string; workingDir: string } }) {
   return (
     <Card className="max-w-md p-0 overflow-hidden border-2 border-primary/20 bg-gradient-to-br from-primary/5 via-transparent to-primary/5">
-      <div className="p-6 text-center space-y-4">
+      <div className="p-4 md:p-6 text-center space-y-4">
         <div className="mx-auto w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/10 flex items-center justify-center">
           <Sparkles className="h-8 w-8 text-primary" />
         </div>
@@ -395,7 +395,7 @@ function WelcomeScreen({ data }: { data: { version: string; model: string; worki
 // Thinking indicator
 function ThinkingIndicator({ thinkingTime, isIdeating }: { thinkingTime?: string; isIdeating?: boolean }) {
   return (
-    <div className="flex items-center gap-3 px-4 py-3">
+    <div className="flex items-center gap-3 px-3 py-2 md:px-4 md:py-3">
       <div className="relative">
         <Sparkles className={cn("h-5 w-5 animate-pulse", isIdeating ? "text-blue-500" : "text-primary")} />
         <div className={cn("absolute inset-0 h-5 w-5 rounded-full animate-ping", isIdeating ? "bg-blue-500/20" : "bg-primary/20")} />
@@ -416,7 +416,7 @@ function ThinkingIndicator({ thinkingTime, isIdeating }: { thinkingTime?: string
 function PlanModeIndicator({ message }: { message?: string }) {
   return (
     <Card className="max-w-[80%] p-0 overflow-hidden border-2 border-blue-500/30 bg-gradient-to-br from-blue-500/5 to-transparent">
-      <div className="flex items-center gap-3 p-4 bg-blue-500/10 border-b border-blue-500/20">
+      <div className="flex items-center gap-3 p-2 md:p-3 bg-blue-500/10 border-b border-blue-500/20">
         <div className="p-2 rounded-lg bg-blue-500/20">
           <Sparkles className="h-5 w-5 text-blue-500 animate-pulse" />
         </div>
@@ -426,7 +426,7 @@ function PlanModeIndicator({ message }: { message?: string }) {
         </div>
       </div>
       {message && (
-        <div className="p-4">
+        <div className="p-2 md:p-3">
           <div className="prose prose-sm dark:prose-invert max-w-none">
             <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{message}</ReactMarkdown>
           </div>
@@ -485,7 +485,7 @@ export function StreamingContent({ content, onResponse }: StreamingContentProps)
 
   if (parsed.type === 'response' && parsed.message) {
     return (
-      <Card className="max-w-[80%] p-4 bg-card border">
+      <Card className="max-w-[80%] p-2 md:p-3 bg-card border">
         <ClaudeResponse message={parsed.message} />
         {parsed.thinkingTime && (
           <div className="mt-3 pt-3 border-t flex items-center gap-2">

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Square, FolderOpen, Image, X, Paperclip, Brain, ListTodo, Circle, CheckCircle, Loader2, GitBranch, MessageSquare, Code2, Star, RotateCcw, MoreVertical, Settings, Menu, ChevronDown, Loader, PlayCircle, Bug, Terminal } from 'lucide-react';
+import { Square, FolderOpen, Image, X, Paperclip, Brain, ListTodo, Circle, CheckCircle, Loader2, GitBranch, MessageSquare, Code2, Star, RotateCcw, MoreVertical, Settings, Menu, ChevronDown, Loader, Bug } from 'lucide-react';
 import 'katex/dist/katex.min.css';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -19,24 +19,24 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import { StreamingContent } from '@/components/chat/StreamingContent';
+import { StreamingContent } from '@/components/chat/messages/StreamingContent';
 import { SessionControls } from '@/components/session/SessionControls';
 import { FileTree } from '@/components/file-tree';
 import { GitPanel } from '@/components/git-panel';
 import { DebugPanel } from '@/components/debug/DebugPanel';
 import { EditorPanel } from '@/components/code-editor';
 import { TodoBar } from '@/components/todo/TodoBar';
-import { MessageContent } from '@/components/chat/MessageContent';
+import { ChatMessage } from '@/components/chat/messages/ChatMessage';
+import { GeneratedImage } from '@/components/chat/GeneratedImage';
 import type { MobileView } from '@/components/mobile';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
 import { api } from '@/services/api';
 import { socketService } from '@/services/socket';
-import type { Session, Message, ApiResponse, MessageImage, CliTool, CliToolExecution, Command, CommandExecutionResult, SessionMode, ModelType, ToolExecution } from '@claude-code-webui/shared';
+import type { Session, Message, ApiResponse, CliTool, CliToolExecution, Command, CommandExecutionResult, SessionMode, ModelType, ToolExecution } from '@claude-code-webui/shared';
 import { cn } from '@/lib/utils';
 import { CommandMenu } from '@/components/chat/CommandMenu';
-import { InteractiveOptions, detectOptions, isChoicePrompt } from '@/components/chat/InteractiveOptions';
-import { ToolExecutionCard } from '@/components/chat/ToolExecutionCard';
+import { ToolExecutionCard } from '@/components/chat/messages/ToolExecutionCard';
 import { PermissionApprovalDialog } from '@/components/chat/PermissionApprovalDialog';
 import { UserQuestionDialog } from '@/components/chat/UserQuestionDialog';
 import { PlanApprovalInput } from '@/components/chat/PlanApprovalInput';
@@ -52,48 +52,6 @@ interface ImageAttachment {
 
 function generateId() {
   return Math.random().toString(36).substring(2, 9);
-}
-
-// Format timestamp iMessage-style: relative for recent, time for same day, date+time for older
-function formatMessageTimestamp(timestamp: string | number): string {
-  const date = new Date(timestamp);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffSeconds = Math.floor(diffMs / 1000);
-  const diffMinutes = Math.floor(diffSeconds / 60);
-
-  // Within the last minute: show seconds ago
-  if (diffSeconds < 60) {
-    return diffSeconds <= 1 ? 'just now' : `${diffSeconds}s ago`;
-  }
-
-  // Within the last hour: show minutes ago
-  if (diffMinutes < 60) {
-    return `${diffMinutes}m ago`;
-  }
-
-  // Same day: show time only
-  const isToday = date.toDateString() === now.toDateString();
-  const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-
-  if (isToday) {
-    return timeStr;
-  }
-
-  // Yesterday
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (date.toDateString() === yesterday.toDateString()) {
-    return `Yesterday, ${timeStr}`;
-  }
-
-  // Same year: show month and day with time
-  if (date.getFullYear() === now.getFullYear()) {
-    return date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ', ' + timeStr;
-  }
-
-  // Different year: show full date with time
-  return date.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' }) + ', ' + timeStr;
 }
 
 export function SessionPage() {
@@ -1231,209 +1189,20 @@ export function SessionPage() {
         {visibleTimeline.map((item, index) => timeBlock('timeline-item-render', () => {
           if (item.type === 'message') {
             const message = item.data;
-            const isTimestampVisible = visibleTimestamp === message.id;
-
-            // Handle meta messages (compact/resume/restart)
-            if (message.role === 'meta') {
-              return (
-                <div key={message.id}>
-                  <div className="flex items-center gap-4 py-4 px-4 animate-fade-in">
-                    <div className="flex-1 h-px bg-border" />
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      {message.metaType === 'compact' && message.metaData && (
-                        <>
-                          {(message.metaData as any).isActive ? (
-                            <>
-                              <Loader className="h-3 w-3 text-blue-500 animate-spin" />
-                              <span className="text-blue-500">Compacting conversation...</span>
-                            </>
-                          ) : (
-                            <>
-                              <CheckCircle className="h-3 w-3 text-blue-500" />
-                              <span>
-                                Compacted from {((message.metaData as any).startContext || 0).toLocaleString()} to{' '}
-                                {((message.metaData as any).endContext || 0).toLocaleString()} tokens
-                                {(message.metaData as any).duration && (
-                                  <> ({((message.metaData as any).duration / 1000).toFixed(1)}s)</>
-                                )}
-                              </span>
-                            </>
-                          )}
-                        </>
-                      )}
-                      {message.metaType === 'resume' && (
-                        <>
-                          <PlayCircle className="h-3 w-3 text-green-500" />
-                          <span className="text-green-500">Conversation resumed</span>
-                        </>
-                      )}
-                      {message.metaType === 'restart' && (
-                        <>
-                          <RotateCcw className="h-3 w-3 text-orange-500" />
-                          <span className="text-orange-500">Session restarted</span>
-                        </>
-                      )}
-                      {message.metaType === 'command_output' && (
-                        <>
-                          <Terminal className="h-3 w-3 text-blue-500" />
-                          <span className="text-blue-500">Command Output</span>
-                        </>
-                      )}
-                    </div>
-                    <div className="flex-1 h-px bg-border" />
-                  </div>
-                  {/* Command output content */}
-                  {message.metaType === 'command_output' && message.metaData && (
-                    <div className="mt-2 px-4 pb-4 w-full">
-                      <Card className="p-4 bg-muted/50">
-                        <MessageContent
-                          content={(message.metaData as any).output}
-                          role="system"
-                          className="text-sm"
-                        />
-                      </Card>
-                    </div>
-                  )}
-                </div>
-              );
-            }
-
-            // Handle system messages
-            if (message.role === 'system') {
-              return (
-                <div key={message.id} className="flex justify-center my-4 animate-fade-in">
-                  <Card className="bg-muted/50 border-muted max-w-[90%] p-3">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
-                      <Terminal className="w-4 h-4" />
-                      <span>System</span>
-                    </div>
-                    <MessageContent
-                      content={message.content}
-                      role="system"
-                    />
-                  </Card>
-                </div>
-              );
-            }
-
             return (
-              <div
+              <ChatMessage
                 key={message.id}
-                className={cn('flex flex-col animate-fade-in w-full', message.role === 'user' ? 'items-end' : 'items-start')}
-              >
-                {/* Timestamp - shown when message is clicked */}
-                <div
-                  className={cn(
-                    'text-xs text-muted-foreground/70 mb-1 transition-all duration-200',
-                    isTimestampVisible ? 'opacity-100 h-auto' : 'opacity-0 h-0 overflow-hidden'
-                  )}
-                >
-                  {formatMessageTimestamp(message.createdAt)}
-                </div>
-                <div className={cn('flex w-full', message.role === 'user' ? 'justify-end' : 'justify-start')}>
-                  {/* iMessage-style tail for assistant messages */}
-                  {message.role === 'assistant' && (
-                    <div className="flex-shrink-0 w-2 self-end">
-                      <svg viewBox="0 0 8 13" className="w-2 h-3 text-card fill-current" style={{ marginBottom: '-1px' }}>
-                        <path d="M0 0 L8 0 L8 13 C8 13 8 6 0 0" />
-                      </svg>
-                    </div>
-                  )}
-                  <Card
-                    className={cn(
-                      'p-1 md:p-2 cursor-pointer select-none max-w-[calc(100vw-2rem)] md:max-w-none overflow-hidden',
-                      message.role === 'user'
-                        ? cn(
-                            'bg-primary text-primary-foreground rounded-br-sm border-primary',
-                            message.isPending && 'opacity-70'
-                          )
-                        : 'bg-card rounded-bl-sm'
-                    )}
-                    onClick={() => setVisibleTimestamp(isTimestampVisible ? null : message.id)}
-                  >
-                    {/* Image thumbnails for user messages */}
-                    {message.images && message.images.length > 0 && (
-                      <div className="flex flex-wrap gap-2 mb-3">
-                        {message.images.map((img: MessageImage, imgIndex: number) => {
-                          const token = useAuthStore.getState().token || '';
-                          const imageUrl = `/api/sessions/${id}/images/${img.filename}?token=${encodeURIComponent(token)}`;
-                          return (
-                            <img
-                              key={imgIndex}
-                              src={imageUrl}
-                              alt={`Attachment ${imgIndex + 1}`}
-                              className="max-h-32 max-w-48 rounded-lg border border-primary-foreground/20 object-cover cursor-pointer hover:opacity-90 transition-opacity"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                window.open(imageUrl, '_blank');
-                              }}
-                            />
-                          );
-                        })}
-                      </div>
-                    )}
-                    <MessageContent
-                      content={message.content}
-                      role={message.role as 'user' | 'assistant'}
-                    />
-                    {/* Interactive options for assistant messages with choices */}
-                    {message.role === 'assistant' && isChoicePrompt(message.content) && (() => {
-                      const options = detectOptions(message.content);
-                      return options ? (
-                        <InteractiveOptions
-                          options={options}
-                          onSelect={(selected) => {
-                            if (id) {
-                              socketService.sendMessage(id, selected);
-                            }
-                          }}
-                          disabled={session.status !== 'running'}
-                        />
-                      ) : null;
-                    })()}
-                  </Card>
-                  {/* iMessage-style tail for user messages */}
-                  {message.role === 'user' && (
-                    <div className="flex-shrink-0 w-2 self-end mb-1">
-                      <svg viewBox="0 0 8 13" className="w-2 h-3 text-primary fill-current">
-                        <path d="M8 0 L0 0 L0 13 C0 13 0 6 8 0" />
-                      </svg>
-                    </div>
-                  )}
-                </div>
-              </div>
+                message={message}
+                sessionId={id || ''}
+                visibleTimestamp={visibleTimestamp}
+                onTimestampClick={setVisibleTimestamp}
+                sessionStatus={session?.status}
+              />
             );
           } else if (item.type === 'image') {
             // Generated Image
             const img = item.data;
-            return (
-              <div key={`gen-img-${img.timestamp}-${index}`} className="flex justify-start animate-fade-in w-full">
-                <Card className="p-2 md:p-4 bg-gradient-to-br from-purple-500/10 to-blue-500/10 border-purple-500/30">
-                  <div className="flex items-center gap-2 mb-3">
-                    <div className="p-1.5 rounded-full bg-purple-500/20">
-                      <Image className="h-4 w-4 text-purple-500" />
-                    </div>
-                    <span className="text-sm font-medium text-purple-600 dark:text-purple-400">
-                      Generated Image (Gemini)
-                    </span>
-                  </div>
-                  {img.imageBase64 && (
-                    <img
-                      src={`data:${img.mimeType};base64,${img.imageBase64}`}
-                      alt={img.prompt}
-                      className="max-w-full rounded-lg border border-purple-500/20 cursor-pointer hover:opacity-90 transition-opacity mb-3"
-                      onClick={() => {
-                        const link = document.createElement('a');
-                        link.href = `data:${img.mimeType};base64,${img.imageBase64}`;
-                        link.download = `gemini-image-${img.timestamp}.png`;
-                        link.click();
-                      }}
-                    />
-                  )}
-                  <p className="text-xs text-muted-foreground italic">"{img.prompt}"</p>
-                </Card>
-              </div>
-            );
+            return <GeneratedImage key={`gen-img-${img.timestamp}-${index}`} image={img} index={index} />;
           } else {
             // Tool Execution
             const exec = item.data;

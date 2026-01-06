@@ -16,6 +16,8 @@ export interface Session {
   sessionState: SessionState;
   lastMessage: string | null;
   starred: boolean;
+  model?: string;
+  mode?: string;
   createdAt: string;
   updatedAt: string;
 }

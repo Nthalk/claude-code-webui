@@ -290,6 +290,27 @@ class SocketService {
       useSessionStore.getState().addMessage(data.sessionId, message);
     });
 
+    // Handle model/mode change events
+    this.socket.on('session:model_changing', (data) => {
+      console.log(`[SOCKET] session:model_changing received: ${data.from} -> ${data.to}`);
+      // This event will be handled by the SessionPage component
+    });
+
+    this.socket.on('session:mode_changing', (data) => {
+      console.log(`[SOCKET] session:mode_changing received: ${data.from} -> ${data.to}`);
+      // This event will be handled by the SessionPage component
+    });
+
+    this.socket.on('session:model_changed', (data) => {
+      console.log(`[SOCKET] session:model_changed received: ${data.model}`);
+      // This event will be handled by the SessionPage component
+    });
+
+    this.socket.on('session:mode_changed', (data) => {
+      console.log(`[SOCKET] session:mode_changed received: ${data.mode}`);
+      // This event will be handled by the SessionPage component
+    });
+
     // Handle heartbeat response
     this.socket.on('heartbeat', (data) => {
       if (data.status === 'not_found' && this.onSessionNotFound) {

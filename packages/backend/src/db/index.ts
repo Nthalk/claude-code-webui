@@ -185,6 +185,13 @@ function runMigrations(db: Database.Database): void {
     // Column already exists, ignore error
   }
 
+  // Migration: Add mode column to sessions table
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN mode TEXT DEFAULT 'auto-accept'`);
+  } catch {
+    // Column already exists, ignore error
+  }
+
   // Migration: Create pending_messages table for storing messages queued while session is inactive
   db.exec(`
     CREATE TABLE IF NOT EXISTS pending_messages (

@@ -27,12 +27,12 @@ import type {
     ToolExecution,
     WebSearchToolInput
 } from '@claude-code-webui/shared';
-import {EditToolDiff} from './EditToolDiff';
-import {BashToolRenderer} from './BashToolRenderer';
-import {GrepToolRenderer} from './GrepToolRenderer';
-import {WebSearchToolRenderer} from './WebSearchToolRenderer';
-import {ReadToolRenderer} from './ReadToolRenderer';
-import {PlanRenderer} from './PlanRenderer';
+import {EditToolDiff} from '../EditToolDiff';
+import {BashToolRenderer} from '../BashToolRenderer';
+import {GrepToolRenderer} from '../GrepToolRenderer';
+import {WebSearchToolRenderer} from '../WebSearchToolRenderer';
+import {ReadToolRenderer} from '../ReadToolRenderer';
+import {PlanRenderer} from '../PlanRenderer';
 import {stripWorkingDirectory} from '@/lib/utils';
 
 interface ToolExecutionCardProps {
@@ -62,7 +62,10 @@ const getToolDisplay = (toolName: string): { icon: typeof Wrench; label: string;
 };
 
 // Extract description and command/detail for two-line preview
-const getInputPreviewTwoLine = (toolName: string, input: unknown, workingDirectory?: string): { description: string; detail: string } => {
+const getInputPreviewTwoLine = (toolName: string, input: unknown, workingDirectory?: string): {
+    description: string;
+    detail: string
+} => {
     if (!input) return {description: '', detail: ''};
     if (typeof input === 'string') return {description: '', detail: input};
 
@@ -208,7 +211,7 @@ const CopyButton = ({text}: { text: string }) => {
             ) : status === 'error' ? (
                 <XCircle className="h-3 w-3 text-red-400"/>
             ) : (
-                <Copy className="h-3 w-3 text-muted-foreground hover:text-foreground"/>
+                <Copy className="h-3 w-3 text-zinc-500 hover:text-zinc-300"/>
             )}
         </button>
     );
@@ -256,27 +259,27 @@ export function ToolExecutionCard({execution, workingDirectory}: ToolExecutionCa
 
     return (
         <div
-            className="flex flex-col gap-0.5 px-3 py-2 bg-muted/30 rounded-lg text-xs border border-border/50 overflow-hidden max-w-full min-w-0">
+            className="flex flex-col p-2 md:p-3 bg-black text-xs border border-zinc-800 overflow-hidden w-full">
             {/* Header row - tool icon, label, and status */}
             <div
                 className={`flex items-center gap-2 ${isClickable ? 'cursor-pointer hover:opacity-80' : ''}`}
                 onClick={() => isClickable && setExpanded(!expanded)}
             >
-                <Icon className="h-4 w-4 text-muted-foreground flex-shrink-0"/>
-                <span className="font-medium text-foreground">{label}</span>
+                <Icon className="h-4 w-4 text-zinc-400 flex-shrink-0"/>
+                <span className="font-medium text-white">{label}</span>
                 {description && (
-                    <span className="text-muted-foreground truncate flex-1 text-xs">
-            {description}
-          </span>
+                    <span className="text-zinc-400 truncate flex-1 text-xs">
+                        {description}
+                    </span>
                 )}
                 {/* Spacer when no description */}
                 {!description && <span className="flex-1"/>}
                 {isExpandable && (
                     <>
                         {expanded ? (
-                            <ChevronDown className="h-3 w-3 text-muted-foreground flex-shrink-0"/>
+                            <ChevronDown className="h-3 w-3 text-zinc-400 flex-shrink-0"/>
                         ) : (
-                            <ChevronRight className="h-3 w-3 text-muted-foreground flex-shrink-0"/>
+                            <ChevronRight className="h-3 w-3 text-zinc-400 flex-shrink-0"/>
                         )}
                     </>
                 )}
@@ -284,15 +287,17 @@ export function ToolExecutionCard({execution, workingDirectory}: ToolExecutionCa
             </div>
             {/* Detail line - command/path/pattern */}
             {detail && (
-                <code
-                    className="text-muted-foreground truncate font-mono text-xs pl-6 block overflow-hidden text-ellipsis whitespace-nowrap">
-                    {detail}
-                </code>
+                <div className="mt-1">
+                    <code
+                        className="text-zinc-400 truncate font-mono text-xs block overflow-hidden text-ellipsis whitespace-nowrap">
+                        {detail}
+                    </code>
+                </div>
             )}
 
             {/* Expanded content */}
             {expanded && (
-                <div className="mt-2 space-y-2 pl-6">
+                <div className="mt-2 space-y-2">
                     {/* Special renderers for specific tools */}
                     {execution.toolName === 'Edit' && parsedInput && typeof parsedInput === 'object' ? (
                         <EditToolDiff
@@ -342,9 +347,9 @@ export function ToolExecutionCard({execution, workingDirectory}: ToolExecutionCa
                                     {formattedInput.map((item, idx) => (
                                         <div key={idx} className="flex flex-col gap-0.5">
                                             <span
-                                                className="text-muted-foreground text-[10px] uppercase tracking-wide">{item.label}</span>
+                                                className="text-zinc-500 text-[10px] uppercase tracking-wide">{item.label}</span>
                                             <pre
-                                                className="p-2 bg-muted/50 rounded text-xs overflow-auto max-h-40 whitespace-pre-wrap break-all text-foreground font-mono">
+                                                className="p-2 bg-zinc-900 rounded text-xs overflow-auto max-h-40 whitespace-pre-wrap break-all text-zinc-100 font-mono">
                         {item.value}
                       </pre>
                                         </div>
@@ -357,16 +362,15 @@ export function ToolExecutionCard({execution, workingDirectory}: ToolExecutionCa
                                 <div className="flex flex-col gap-0.5">
                                     <div className="flex items-center gap-1">
                                         <span
-                                            className="text-muted-foreground text-[10px] uppercase tracking-wide">Output</span>
+                                            className="text-zinc-500 text-[10px] uppercase tracking-wide">Output</span>
                                         <CopyButton text={execution.result}/>
                                     </div>
                                     <pre
-                                        className="p-2 bg-muted/50 rounded text-xs overflow-auto max-h-60 whitespace-pre-wrap break-all text-foreground font-mono">
+                                        className="p-2 bg-zinc-900 rounded text-xs overflow-auto max-h-60 whitespace-pre-wrap break-all text-zinc-100 font-mono">
                     {execution.result}
                   </pre>
                                 </div>
                             )}
-
                             {/* Error */}
                             {execution.error && (
                                 <div className="flex flex-col gap-0.5">
@@ -375,9 +379,7 @@ export function ToolExecutionCard({execution, workingDirectory}: ToolExecutionCa
                                         <CopyButton text={execution.error}/>
                                     </div>
                                     <pre
-                                        className="p-2 bg-red-500/10 rounded text-xs overflow-auto max-h-40 whitespace-pre-wrap break-all text-red-400 font-mono">
-                    {execution.error}
-                  </pre>
+                                        className="p-2 bg-red-950 rounded text-xs overflow-auto max-h-40 whitespace-pre-wrap break-all text-red-400 font-mono">{execution.error}</pre>
                                 </div>
                             )}
                         </>
