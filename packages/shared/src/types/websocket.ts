@@ -210,6 +210,7 @@ export interface ServerToClientEvents {
   'session:plan_approval_resolved': (data: { sessionId: string; requestId: string }) => void;
   'session:commit_approval_request': (data: PendingCommitApproval) => void;
   'session:commit_approval_resolved': (data: { sessionId: string; requestId: string }) => void;
+  'session:action_failed': (data: { sessionId: string; requestId: string; type: string; error: string }) => void;
   'session:compacting': (data: { sessionId: string; isCompacting: boolean }) => void;
   'session:compact_boundary': (data: { sessionId: string; metadata: CompactMetadata }) => void;
   'session:command_output': (data: { sessionId: string; output: string }) => void;

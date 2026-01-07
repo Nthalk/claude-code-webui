@@ -99,6 +99,33 @@ export class PendingActionsQueue {
   }
 
   /**
+   * Mark an action as failed and notify the user
+   */
+  failAction(sessionId: string, requestId: string, error: string) {
+    const activeAction = this.activeActions.get(sessionId);
+
+    if (activeAction && activeAction.requestId === requestId) {
+      console.log(`[QUEUE] Failed ${activeAction.type} action ${requestId} for session ${sessionId}: ${error}`);
+
+      // Remove from active actions
+      this.activeActions.delete(sessionId);
+
+      // Emit an error event to the frontend
+      if (this.io) {
+        this.io.to(`session:${sessionId}`).emit('session:action_failed', {
+          sessionId,
+          requestId,
+          type: activeAction.type,
+          error,
+        });
+      }
+
+      // Process next action
+      this.processQueue(sessionId);
+    }
+  }
+
+  /**
    * Process the queue for a session - emit the highest priority action
    */
   private processQueue(sessionId: string) {
@@ -124,6 +151,12 @@ export class PendingActionsQueue {
       };
 
       const event = eventMap[nextAction.type];
+      if (!event) {
+        console.error(`[QUEUE] Unknown action type: ${nextAction.type}`);
+        this.failAction(sessionId, nextAction.requestId, `Unknown action type: ${nextAction.type}`);
+        return;
+      }
+
       this.io.to(`session:${sessionId}`).emit(event as any, nextAction.data);
     }
   }

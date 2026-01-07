@@ -12,6 +12,8 @@ export function CommitApprovalInput({ onRespond, commitMessage, gitStatus }: Com
   const [mode, setMode] = useState<'buttons' | 'reason'>('buttons');
   const [rejectReason, setRejectReason] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(true);
+  const [showCommitMessage, setShowCommitMessage] = useState(true);
   const [showGitStatus, setShowGitStatus] = useState(true);
   const [wantsPush, setWantsPush] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -160,8 +162,11 @@ export function CommitApprovalInput({ onRespond, commitMessage, gitStatus }: Com
 
   return (
     <div className="flex flex-col gap-3 px-1">
-      {/* Info banner */}
-      <div className="flex items-center gap-3 p-3 rounded-lg bg-blue-500/10 border border-blue-500/30">
+      {/* Info banner - Clickable header */}
+      <div
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="flex items-center gap-3 p-3 rounded-lg bg-blue-500/10 border border-blue-500/30 cursor-pointer hover:bg-blue-500/15 transition-colors"
+      >
         <div className="p-1.5 bg-blue-500/20 rounded-lg shrink-0">
           <GitCommit className="h-5 w-5 text-blue-500" />
         </div>
@@ -169,18 +174,44 @@ export function CommitApprovalInput({ onRespond, commitMessage, gitStatus }: Com
           <p className="text-sm font-medium text-blue-700 dark:text-blue-300">
             Commit Approval Required
           </p>
-          <p className="text-xs text-blue-600/80 dark:text-blue-400/80">
-            Claude wants to create a git commit. Review the changes below.
-          </p>
+          {isExpanded && (
+            <p className="text-xs text-blue-600/80 dark:text-blue-400/80">
+              Claude wants to create a git commit. Review the changes below.
+            </p>
+          )}
+        </div>
+        <div className="shrink-0">
+          {isExpanded ? (
+            <ChevronUp className="h-5 w-5 text-blue-500" />
+          ) : (
+            <ChevronDown className="h-5 w-5 text-blue-500" />
+          )}
         </div>
       </div>
 
-      {/* Commit message */}
-      <div className="bg-muted/30 rounded-lg p-3">
-        <p className="text-sm font-medium mb-1">Commit Message</p>
-        <pre className="text-sm font-mono text-muted-foreground whitespace-pre-wrap break-words">
-          {commitMessage}
-        </pre>
+      {/* Content sections - only show when expanded */}
+      {isExpanded && (
+        <>
+          {/* Commit message */}
+          <div className="border border-border rounded-lg overflow-hidden">
+        <button
+          onClick={() => setShowCommitMessage(!showCommitMessage)}
+          className="w-full p-3 bg-muted/30 hover:bg-muted/50 flex items-center justify-between text-sm font-medium transition-colors"
+        >
+          <span>Commit Message</span>
+          {showCommitMessage ? (
+            <ChevronUp className="h-4 w-4 text-muted-foreground" />
+          ) : (
+            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          )}
+        </button>
+        {showCommitMessage && (
+          <div className="p-3 bg-background border-t border-border">
+            <pre className="text-sm font-mono text-muted-foreground whitespace-pre-wrap break-words">
+              {commitMessage}
+            </pre>
+          </div>
+        )}
       </div>
 
       {/* Git status */}
@@ -258,6 +289,8 @@ export function CommitApprovalInput({ onRespond, commitMessage, gitStatus }: Com
           Deny
         </Button>
       </div>
+        </>
+      )}
     </div>
   );
 }

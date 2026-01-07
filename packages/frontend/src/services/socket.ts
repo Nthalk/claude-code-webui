@@ -275,6 +275,39 @@ class SocketService {
       }
     });
 
+    this.socket.on('session:action_failed', (data) => {
+      console.log(`[SOCKET] session:action_failed received:`, data);
+      const store = useSessionStore.getState();
+
+      // Clear the appropriate pending action based on type
+      switch (data.type) {
+        case 'permission':
+          store.setPendingPermission(data.sessionId, null);
+          break;
+        case 'question':
+          store.setPendingUserQuestion(data.sessionId, null);
+          break;
+        case 'plan':
+          store.setPendingPlanApproval(data.sessionId, null);
+          break;
+        case 'commit':
+          store.setPendingCommitApproval(data.sessionId, null);
+          break;
+      }
+
+      // Show error message to user
+      const message: any = {
+        id: generateId(),
+        sessionId: data.sessionId,
+        role: 'meta' as const,
+        content: '',
+        createdAt: new Date().toISOString(),
+        metaType: 'error' as const,
+        metaData: { error: `Failed to process ${data.type} request: ${data.error}` },
+      };
+      store.addMessage(data.sessionId, message);
+    });
+
     this.socket.on('session:cleared', (data) => {
       console.log(`[SOCKET] session:cleared received for ${data.sessionId}`);
       const store = useSessionStore.getState();
