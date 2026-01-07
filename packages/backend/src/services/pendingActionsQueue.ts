@@ -95,6 +95,8 @@ export class PendingActionsQueue {
 
       // Process next action
       this.processQueue(sessionId);
+    } else {
+      console.warn(`[QUEUE] Attempted to resolve non-active action ${requestId} for session ${sessionId}`);
     }
   }
 

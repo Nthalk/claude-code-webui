@@ -133,6 +133,28 @@ async function main() {
     });
   }
 
+  // 404 handler for unmatched routes - must come before error handler
+  app.use((req, res, next) => {
+    // Skip if response already sent
+    if (res.headersSent) {
+      return next();
+    }
+
+    // Return 404 for unmatched API routes
+    if (req.path.startsWith('/api') || req.path.startsWith('/auth')) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          code: 'NOT_FOUND',
+          message: `Route ${req.method} ${req.path} not found`
+        }
+      });
+    }
+
+    // Let other routes fall through (handled by SPA in production)
+    next();
+  });
+
   // Error handler
   app.use(errorHandler);
 
