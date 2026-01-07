@@ -428,15 +428,22 @@ Returns JSON with one of:
     },
     {
         name: 'confirm_plan',
-        description: `Request user approval for the implementation plan before exiting plan mode. This tool reads the most recent plan file and displays it to the user for approval.
+        description: `Request user approval for the implementation plan before exiting plan mode. This tool reads the plan file and displays it to the user for approval.
 
 Usage:
 - Call this before attempting to use ExitPlanMode
 - Once approved, ExitPlanMode will be allowed
-- If rejected, you'll receive feedback to revise the plan`,
+- If rejected, you'll receive feedback to revise the plan
+- Optional: provide planPath parameter with the path to your plan file
+- If no planPath provided, searches for most recent .md file in /home/nthalk/.claude/plans/`,
         inputSchema: {
             type: 'object',
-            properties: {},
+            properties: {
+                planPath: {
+                    type: 'string',
+                    description: 'Optional path to the plan file. If not provided, searches for most recent plan.',
+                },
+            },
         },
     },
     {
@@ -667,44 +674,77 @@ async function handlePermissionPrompt(
 // Handle confirm_plan tool
 async function handleConfirmPlan(
     sessionId: string,
-    backendUrl: string
+    backendUrl: string,
+    providedPlanPath?: string
 ): Promise<{ approved: boolean; message?: string }> {
     const requestId = crypto.randomUUID();
-    log(`Handling confirm_plan request`);
+    log(`Handling confirm_plan request${providedPlanPath ? ` with provided path: ${providedPlanPath}` : ''}`);
 
-    // Read the most recent plan file
+    // Read the plan file
     let planContent: string | undefined;
     let planPath: string | undefined;
 
     try {
-        const plansDir = '/home/nthalk/.claude/plans';
-        const files = await fs.promises.readdir(plansDir);
+        if (providedPlanPath) {
+            // Use the provided plan path
+            planPath = providedPlanPath;
 
-        // Get all .md files with their stats
-        const planFiles = await Promise.all(
-            files
-                .filter(f => f.endsWith('.md'))
-                .map(async (file) => {
-                    const filePath = path.join(plansDir, file);
-                    const stats = await fs.promises.stat(filePath);
-                    return { file, filePath, mtime: stats.mtime };
-                })
-        );
+            // Check if file exists
+            try {
+                await fs.promises.access(planPath, fs.constants.R_OK);
+            } catch {
+                log(`Provided plan file not found: ${planPath}`);
+                return {
+                    approved: false,
+                    message: `Plan file not found at: ${planPath}`
+                };
+            }
 
-        // Sort by modification time (newest first)
-        planFiles.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
-
-        // Get the most recent plan
-        if (planFiles.length > 0 && planFiles[0]) {
-            planPath = planFiles[0].filePath;
             planContent = await fs.promises.readFile(planPath, 'utf-8');
-            log(`Found plan at: ${planPath}`);
+            log(`Read plan from provided path: ${planPath}`);
         } else {
-            log('No plan files found');
-            return {
-                approved: false,
-                message: 'No plan file found. Please create a plan before requesting approval.'
-            };
+            // Fall back to searching for most recent plan
+            const plansDir = '/home/nthalk/.claude/plans';
+
+            // Check if directory exists
+            try {
+                await fs.promises.access(plansDir, fs.constants.R_OK);
+            } catch {
+                log('Plans directory does not exist');
+                return {
+                    approved: false,
+                    message: 'No plan file found. Please create a plan before requesting approval.'
+                };
+            }
+
+            const files = await fs.promises.readdir(plansDir);
+
+            // Get all .md files with their stats
+            const planFiles = await Promise.all(
+                files
+                    .filter(f => f.endsWith('.md'))
+                    .map(async (file) => {
+                        const filePath = path.join(plansDir, file);
+                        const stats = await fs.promises.stat(filePath);
+                        return { file, filePath, mtime: stats.mtime };
+                    })
+            );
+
+            // Sort by modification time (newest first)
+            planFiles.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+
+            // Get the most recent plan
+            if (planFiles.length > 0 && planFiles[0]) {
+                planPath = planFiles[0].filePath;
+                planContent = await fs.promises.readFile(planPath, 'utf-8');
+                log(`Found plan at: ${planPath}`);
+            } else {
+                log('No plan files found');
+                return {
+                    approved: false,
+                    message: 'No plan file found. Please create a plan before requesting approval.'
+                };
+            }
         }
     } catch (err) {
         log(`Error reading plan files: ${err}`);
@@ -1167,7 +1207,8 @@ class WebUIMcpServer {
             }
 
             try {
-                const result = await handleConfirmPlan(this.sessionId, this.backendUrl);
+                const input = args as unknown as { planPath?: string };
+                const result = await handleConfirmPlan(this.sessionId, this.backendUrl, input.planPath);
 
                 return {
                     jsonrpc: '2.0',
