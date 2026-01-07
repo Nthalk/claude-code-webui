@@ -29,6 +29,10 @@ import * as path from 'path';
 import * as os from 'os';
 import {URL} from 'url';
 import * as crypto from 'crypto';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 // MCP Protocol types
 interface JsonRpcRequest {
@@ -435,6 +439,25 @@ Usage:
             properties: {},
         },
     },
+    {
+        name: 'commit',
+        description: `Create a git commit with user approval. Shows git status and allows the user to approve, deny, or choose to push.
+
+Usage:
+- Provide a commit message as input
+- User will see git status, can approve/deny, and optionally push
+- Returns result of commit operation`,
+        inputSchema: {
+            type: 'object',
+            properties: {
+                message: {
+                    type: 'string',
+                    description: 'The commit message',
+                },
+            },
+            required: ['message'],
+        },
+    },
 ];
 
 // Handle ask_user tool
@@ -736,6 +759,116 @@ async function handleConfirmPlan(
         const message = pollResult.reason || pollResult.error || 'User denied plan. Please revise based on their feedback.';
         log(`User denied plan: ${message}`);
         return { approved: false, message };
+    }
+}
+
+// Handle commit tool
+async function handleCommit(
+    sessionId: string,
+    backendUrl: string,
+    commitMessage: string
+): Promise<{ success: boolean; message: string; pushed?: boolean }> {
+    const requestId = crypto.randomUUID();
+    log(`Handling commit request with message: ${commitMessage}`);
+
+    // Get current git status
+    let gitStatus: string;
+    try {
+        const { stdout } = await execAsync('git status --porcelain=v1', {
+            cwd: process.env.WEBUI_PROJECT_PATH || process.cwd()
+        });
+        gitStatus = stdout;
+
+        if (!gitStatus.trim()) {
+            return {
+                success: false,
+                message: 'No changes to commit. Working directory is clean.'
+            };
+        }
+    } catch (err) {
+        log(`Error getting git status: ${err}`);
+        return {
+            success: false,
+            message: `Failed to get git status: ${err instanceof Error ? err.message : String(err)}`
+        };
+    }
+
+    // POST the commit request to the backend
+    const postResult = await makeRequest(`${backendUrl}/api/commit/request`, {
+        method: 'POST',
+        body: JSON.stringify({
+            sessionId,
+            requestId,
+            commitMessage,
+            gitStatus,
+        }),
+    });
+
+    if (!postResult.success) {
+        log(`Backend error: ${postResult.error}`);
+        return {
+            success: false,
+            message: postResult.error || 'Failed to request commit approval'
+        };
+    }
+
+    // Long-poll for user response
+    log(`Waiting for commit approval response...`);
+    const pollResult = await makeRequest(
+        `${backendUrl}/api/commit/response/${requestId}`,
+        {
+            method: 'GET',
+            timeout: 120000, // 2 minutes
+        }
+    ) as { approved: boolean; push?: boolean; reason?: string; error?: string };
+
+    if (!pollResult.approved) {
+        const message = pollResult.reason || pollResult.error || 'User denied commit';
+        log(`User denied commit: ${message}`);
+        return { success: false, message };
+    }
+
+    log('User approved commit');
+
+    // Execute the commit
+    try {
+        const cwd = process.env.WEBUI_PROJECT_PATH || process.cwd();
+        await execAsync(`git add -A`, { cwd });
+        await execAsync(`git commit -m "${commitMessage.replace(/"/g, '\\"')}"`, { cwd });
+        log('Commit successful');
+
+        // Push if requested
+        if (pollResult.push) {
+            log('User requested push, pushing to remote...');
+            try {
+                await execAsync('git push', { cwd });
+                log('Push successful');
+                return {
+                    success: true,
+                    message: 'Commit created and pushed successfully',
+                    pushed: true
+                };
+            } catch (err) {
+                log(`Push failed: ${err}`);
+                return {
+                    success: true,
+                    message: `Commit created successfully but push failed: ${err instanceof Error ? err.message : String(err)}`,
+                    pushed: false
+                };
+            }
+        }
+
+        return {
+            success: true,
+            message: 'Commit created successfully',
+            pushed: false
+        };
+    } catch (err) {
+        log(`Commit failed: ${err}`);
+        return {
+            success: false,
+            message: `Failed to create commit: ${err instanceof Error ? err.message : String(err)}`
+        };
     }
 }
 
@@ -1048,6 +1181,58 @@ class WebUIMcpServer {
                                     : result.message || 'Plan denied. Please revise based on feedback.',
                             },
                         ],
+                    },
+                };
+            } catch (err) {
+                const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+                return {
+                    jsonrpc: '2.0',
+                    id,
+                    result: {
+                        content: [
+                            {
+                                type: 'text',
+                                text: `Error: ${errorMessage}`,
+                            },
+                        ],
+                        isError: true,
+                    },
+                };
+            }
+        }
+
+        if (name === 'commit') {
+            if (!this.sessionId) {
+                return {
+                    jsonrpc: '2.0',
+                    id,
+                    result: {
+                        content: [
+                            {
+                                type: 'text',
+                                text: 'Error: WEBUI_SESSION_ID not set. Cannot request commit approval.',
+                            },
+                        ],
+                        isError: true,
+                    },
+                };
+            }
+
+            try {
+                const input = args as unknown as { message: string };
+                const result = await handleCommit(this.sessionId, this.backendUrl, input.message);
+
+                return {
+                    jsonrpc: '2.0',
+                    id,
+                    result: {
+                        content: [
+                            {
+                                type: 'text',
+                                text: result.message,
+                            },
+                        ],
+                        isError: !result.success,
                     },
                 };
             } catch (err) {

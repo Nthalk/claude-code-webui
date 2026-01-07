@@ -233,6 +233,11 @@ class SocketService {
       useSessionStore.getState().setPendingPlanApproval(data.sessionId, data);
     });
 
+    this.socket.on('session:commit_approval_request', (data) => {
+      console.log(`[SOCKET] session:commit_approval_request received for session:`, data.sessionId);
+      useSessionStore.getState().setPendingCommitApproval(data.sessionId, data);
+    });
+
     // Handle permission/question resolved (dismiss dialog on other tabs)
     this.socket.on('session:permission_resolved', (data) => {
       console.log(`[SOCKET] session:permission_resolved received:`, data.requestId);
@@ -258,6 +263,15 @@ class SocketService {
       const pending = store.pendingPlanApprovals[data.sessionId];
       if (pending?.requestId === data.requestId) {
         store.setPendingPlanApproval(data.sessionId, null);
+      }
+    });
+
+    this.socket.on('session:commit_approval_resolved', (data) => {
+      console.log(`[SOCKET] session:commit_approval_resolved received:`, data.requestId);
+      const store = useSessionStore.getState();
+      const pending = store.pendingCommitApprovals[data.sessionId];
+      if (pending?.requestId === data.requestId) {
+        store.setPendingCommitApproval(data.sessionId, null);
       }
     });
 

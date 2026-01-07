@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Session, Message, SessionStatus, UsageData, ToolExecution, PendingPermission, PendingUserQuestion, PendingPlanApproval } from '@claude-code-webui/shared';
+import type { Session, Message, SessionStatus, UsageData, ToolExecution, PendingPermission, PendingUserQuestion, PendingPlanApproval, PendingCommitApproval } from '@claude-code-webui/shared';
 
 // Activity state for showing what Claude is doing
 export interface ActivityState {
@@ -56,6 +56,7 @@ interface SessionState {
   pendingPermissions: Record<string, PendingPermission | null>;
   pendingUserQuestions: Record<string, PendingUserQuestion | null>;
   pendingPlanApprovals: Record<string, PendingPlanApproval | null>;
+  pendingCommitApprovals: Record<string, PendingCommitApproval | null>;
 
   // File Tree state
   fileTreeOpen: Record<string, boolean>;
@@ -108,6 +109,7 @@ interface SessionState {
   setPendingPermission: (sessionId: string, permission: PendingPermission | null) => void;
   setPendingUserQuestion: (sessionId: string, question: PendingUserQuestion | null) => void;
   setPendingPlanApproval: (sessionId: string, approval: PendingPlanApproval | null) => void;
+  setPendingCommitApproval: (sessionId: string, approval: PendingCommitApproval | null) => void;
 
   // File Tree actions
   setFileTreeOpen: (sessionId: string, open: boolean) => void;
@@ -138,6 +140,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   pendingPermissions: {},
   pendingUserQuestions: {},
   pendingPlanApprovals: {},
+  pendingCommitApprovals: {},
   fileTreeOpen: {},
   selectedFile: {},
   openFiles: {},
@@ -384,6 +387,14 @@ export const useSessionStore = create<SessionState>((set) => ({
     set((state) => ({
       pendingPlanApprovals: {
         ...state.pendingPlanApprovals,
+        [sessionId]: approval,
+      },
+    })),
+
+  setPendingCommitApproval: (sessionId, approval) =>
+    set((state) => ({
+      pendingCommitApprovals: {
+        ...state.pendingCommitApprovals,
         [sessionId]: approval,
       },
     })),

@@ -40,6 +40,7 @@ import { ToolExecutionCard } from '@/components/chat/messages/ToolExecutionCard'
 import { PermissionApprovalDialog } from '@/components/chat/PermissionApprovalDialog';
 import { UserQuestionDialog } from '@/components/chat/UserQuestionDialog';
 import { PlanApprovalInput } from '@/components/chat/PlanApprovalInput';
+import { CommitApprovalInput } from '@/components/chat/CommitApprovalInput';
 import { useDocumentSwipeGesture, useChanged, timeBlock } from '@/hooks';
 import { useTheme, type FontFamily, type FontSize } from '@/providers/ThemeProvider';
 import type { PermissionAction, UserQuestionAnswers } from '@claude-code-webui/shared';
@@ -94,6 +95,7 @@ export function SessionPage() {
   const pendingPermissions = useSessionStore((state) => state.pendingPermissions);
   const pendingUserQuestions = useSessionStore((state) => state.pendingUserQuestions);
   const pendingPlanApprovals = useSessionStore((state) => state.pendingPlanApprovals);
+  const pendingCommitApprovals = useSessionStore((state) => state.pendingCommitApprovals);
   const selectedFile = useSessionStore((state) => state.selectedFile);
   const openFiles = useSessionStore((state) => state.openFiles);
   const usage = useSessionStore((state) => state.usage);
@@ -240,6 +242,7 @@ export function SessionPage() {
   const currentPendingPermission = pendingPermissions[id || ''] || null;
   const currentPendingUserQuestion = pendingUserQuestions[id || ''] || null;
   const currentPendingPlanApproval = pendingPlanApprovals[id || ''] || null;
+  const currentPendingCommitApproval = pendingCommitApprovals[id || ''] || null;
   const hasTodos = currentTodos.length > 0 && currentTodos.some(t => t.status !== 'completed');
 
   // Right panel state from store (controlled by sidebar toggle buttons)
@@ -866,6 +869,37 @@ export function SessionPage() {
     }
   }, [id, currentPendingPlanApproval]);
 
+  const handleCommitApprovalResponse = useCallback(async (approved: boolean, push?: boolean, reason?: string) => {
+    if (!id || !currentPendingCommitApproval) return;
+    try {
+      const token = useAuthStore.getState().token;
+      if (!token) {
+        throw new Error('No auth token');
+      }
+
+      // Send response to backend API
+      const response = await fetch('/api/commit/respond', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          requestId: currentPendingCommitApproval.requestId,
+          approved,
+          push,
+          reason
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to respond to commit approval');
+      }
+    } catch (error) {
+      console.error('Failed to respond to commit approval request:', error);
+    }
+  }, [id, currentPendingCommitApproval]);
+
   const handleCancelCliTool = () => {
     if (cliToolAbortRef.current) {
       cliToolAbortRef.current.abort();
@@ -1399,6 +1433,12 @@ export function SessionPage() {
             <PlanApprovalInput
               onRespond={handlePlanApprovalResponse}
               planContent={currentPendingPlanApproval?.planContent}
+            />
+          ) : currentPendingCommitApproval ? (
+            <CommitApprovalInput
+              onRespond={handleCommitApprovalResponse}
+              commitMessage={currentPendingCommitApproval.commitMessage}
+              gitStatus={currentPendingCommitApproval.gitStatus}
             />
           ) : (
             <>

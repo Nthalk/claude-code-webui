@@ -8,19 +8,20 @@ import { pendingActionsQueue } from '../services/pendingActionsQueue';
 const router = Router();
 
 // Types
-interface PendingPlanApproval {
+interface PendingCommitApproval {
   sessionId: string;
   requestId: string;
   status: 'pending' | 'approved' | 'denied';
+  push?: boolean;
   reason?: string;
   createdAt: number;
-  planContent?: string;
-  planPath?: string;
+  commitMessage: string;
+  gitStatus: string;
 }
 
-// In-memory storage for pending plan approval requests
-// Key: requestId, Value: PendingPlanApproval
-const pendingRequests = new Map<string, PendingPlanApproval>();
+// In-memory storage for pending commit approval requests
+// Key: requestId, Value: PendingCommitApproval
+const pendingRequests = new Map<string, PendingCommitApproval>();
 
 // Cleanup old requests (older than 3 minutes)
 function cleanupOldRequests(): void {
@@ -40,27 +41,28 @@ setInterval(cleanupOldRequests, 60 * 1000);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Validation schemas
-const planRequestSchema = z.object({
+const commitRequestSchema = z.object({
   sessionId: z.string().min(1),
   requestId: z.string().uuid(),
-  planContent: z.string().optional(),
-  planPath: z.string().optional(),
+  commitMessage: z.string().min(1),
+  gitStatus: z.string(),
 });
 
-const planRespondSchema = z.object({
+const commitRespondSchema = z.object({
   requestId: z.string().uuid(),
   approved: z.boolean(),
+  push: z.boolean().optional(),
   reason: z.string().optional(),
 });
 
 /**
- * POST /api/plan/request
- * Called by the gate-exit-plan-mode-hook script when Claude wants to exit plan mode.
+ * POST /api/commit/request
+ * Called by the MCP server when Claude wants to create a commit.
  * Stores the request and emits to frontend via WebSocket.
  * No authentication required (called by local script).
  */
 router.post('/request', async (req: Request, res: Response) => {
-  const parsed = planRequestSchema.safeParse(req.body);
+  const parsed = commitRequestSchema.safeParse(req.body);
 
   if (!parsed.success) {
     return res.status(400).json({
@@ -69,36 +71,36 @@ router.post('/request', async (req: Request, res: Response) => {
     });
   }
 
-  const { sessionId, requestId, planContent, planPath } = parsed.data;
+  const { sessionId, requestId, commitMessage, gitStatus } = parsed.data;
 
   // Store the pending request
-  const pendingRequest: PendingPlanApproval = {
+  const pendingRequest: PendingCommitApproval = {
     sessionId,
     requestId,
     status: 'pending',
     createdAt: Date.now(),
-    planContent,
-    planPath,
+    commitMessage,
+    gitStatus,
   };
 
   pendingRequests.set(requestId, pendingRequest);
 
   // Add to queue instead of directly emitting
-  pendingActionsQueue.addAction(sessionId, 'plan', requestId, {
+  pendingActionsQueue.addAction(sessionId, 'commit', requestId, {
     sessionId,
     requestId,
-    planContent,
-    planPath,
+    commitMessage,
+    gitStatus,
   });
 
-  console.log(`[PLAN] Approval request ${requestId} created for session ${sessionId}`);
+  console.log(`[COMMIT] Approval request ${requestId} created for session ${sessionId}`);
 
   res.json({ success: true, requestId });
 });
 
 /**
- * GET /api/plan/response/:requestId
- * Long-polled by the gate-exit-plan-mode-hook script to wait for user response.
+ * GET /api/commit/response/:requestId
+ * Long-polled by the MCP server to wait for user response.
  * No authentication required (called by local script).
  */
 router.get('/response/:requestId', async (req: Request, res: Response) => {
@@ -129,13 +131,18 @@ router.get('/response/:requestId', async (req: Request, res: Response) => {
       // Clean up the request
       pendingRequests.delete(requestId);
 
-      console.log(`[PLAN] Request ${requestId} resolved: ${request.status}`);
+      console.log(`[COMMIT] Request ${requestId} resolved: ${request.status}`);
 
       const response: any = {
         approved,
       };
 
-      // Include reason if available (for denial)
+      // Include push flag if approved
+      if (approved && request.push !== undefined) {
+        response.push = request.push;
+      }
+
+      // Include reason if denied
       if (!approved && request.reason) {
         response.reason = request.reason;
       }
@@ -150,7 +157,7 @@ router.get('/response/:requestId', async (req: Request, res: Response) => {
   // Timeout - deny by default
   pendingRequests.delete(requestId);
 
-  console.log(`[PLAN] Request ${requestId} timed out`);
+  console.log(`[COMMIT] Request ${requestId} timed out`);
 
   res.json({
     approved: false,
@@ -159,28 +166,29 @@ router.get('/response/:requestId', async (req: Request, res: Response) => {
 });
 
 /**
- * POST /api/plan/respond
- * Called by the frontend when user approves or denies a plan exit request.
+ * POST /api/commit/respond
+ * Called by the frontend when user approves or denies a commit request.
  * Requires authentication.
  */
 router.post('/respond', requireAuth, async (req: Request, res: Response) => {
-  const parsed = planRespondSchema.safeParse(req.body);
+  const parsed = commitRespondSchema.safeParse(req.body);
 
   if (!parsed.success) {
     throw new AppError('Invalid request data', 400, 'VALIDATION_ERROR');
   }
 
-  const { requestId, approved, reason } = parsed.data;
+  const { requestId, approved, push, reason } = parsed.data;
 
   const request = pendingRequests.get(requestId);
 
   if (!request) {
-    throw new AppError('Plan approval request not found or expired', 404, 'NOT_FOUND');
+    throw new AppError('Commit approval request not found or expired', 404, 'NOT_FOUND');
   }
 
   // Update request status
   if (approved) {
     request.status = 'approved';
+    request.push = push || false;
   } else {
     request.status = 'denied';
     if (reason) {
@@ -188,7 +196,7 @@ router.post('/respond', requireAuth, async (req: Request, res: Response) => {
     }
   }
 
-  console.log(`[PLAN] User responded to ${requestId}: ${approved ? 'approved' : 'denied'}`);
+  console.log(`[COMMIT] User responded to ${requestId}: ${approved ? 'approved' : 'denied'}`);
 
   // Notify the queue that this action is resolved
   pendingActionsQueue.resolveAction(request.sessionId, requestId);
@@ -196,7 +204,7 @@ router.post('/respond', requireAuth, async (req: Request, res: Response) => {
   // Broadcast to all clients that this request was resolved
   // This dismisses the dialog on other tabs/devices
   const io: Server = req.app.get('io');
-  io.to(`session:${request.sessionId}`).emit('session:plan_approval_resolved', {
+  io.to(`session:${request.sessionId}`).emit('session:commit_approval_resolved', {
     sessionId: request.sessionId,
     requestId,
   });
@@ -208,8 +216,8 @@ router.post('/respond', requireAuth, async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/plan/pending/:sessionId
- * Get pending plan approval requests for a session.
+ * GET /api/commit/pending/:sessionId
+ * Get pending commit approval requests for a session.
  * Useful for frontend to check if there are outstanding requests.
  * Requires authentication.
  */
@@ -219,7 +227,7 @@ router.get('/pending/:sessionId', requireAuth, (req: Request, res: Response) => 
     return res.status(400).json({ success: false, error: 'Missing sessionId' });
   }
 
-  const pending: PendingPlanApproval[] = [];
+  const pending: PendingCommitApproval[] = [];
   for (const request of pendingRequests.values()) {
     if (request.sessionId === sessionId && request.status === 'pending') {
       pending.push(request);
@@ -233,8 +241,8 @@ router.get('/pending/:sessionId', requireAuth, (req: Request, res: Response) => 
 });
 
 // Export helper functions for internal use
-export function getPendingPlanApprovalsForSession(sessionId: string): PendingPlanApproval[] {
-  const pending: PendingPlanApproval[] = [];
+export function getPendingCommitApprovalsForSession(sessionId: string): PendingCommitApproval[] {
+  const pending: PendingCommitApproval[] = [];
   for (const request of pendingRequests.values()) {
     if (request.sessionId === sessionId && request.status === 'pending') {
       pending.push(request);
@@ -243,8 +251,8 @@ export function getPendingPlanApprovalsForSession(sessionId: string): PendingPla
   return pending;
 }
 
-// Clear all pending plan approvals for a session (used when process is terminated)
-export function clearPendingPlanApprovalsForSession(sessionId: string): void {
+// Clear all pending commit approvals for a session (used when process is terminated)
+export function clearPendingCommitApprovalsForSession(sessionId: string): void {
   const cleared: string[] = [];
   for (const [requestId, request] of pendingRequests.entries()) {
     if (request.sessionId === sessionId) {
@@ -253,12 +261,12 @@ export function clearPendingPlanApprovalsForSession(sessionId: string): void {
     }
   }
   if (cleared.length > 0) {
-    console.log(`[PLAN] Cleared ${cleared.length} pending plan approvals for session ${sessionId}`);
+    console.log(`[COMMIT] Cleared ${cleared.length} pending commit approvals for session ${sessionId}`);
   }
 }
 
-// Deny all pending plan approvals for a session (used for /clear and interrupt)
-export function denyPendingPlanApprovalsForSession(sessionId: string): void {
+// Deny all pending commit approvals for a session (used for /clear and interrupt)
+export function denyPendingCommitApprovalsForSession(sessionId: string): void {
   const denied: string[] = [];
   for (const [requestId, request] of pendingRequests.entries()) {
     if (request.sessionId === sessionId && request.status === 'pending') {
@@ -268,7 +276,7 @@ export function denyPendingPlanApprovalsForSession(sessionId: string): void {
     }
   }
   if (denied.length > 0) {
-    console.log(`[PLAN] Denied ${denied.length} pending plan approvals for session ${sessionId}`);
+    console.log(`[COMMIT] Denied ${denied.length} pending commit approvals for session ${sessionId}`);
   }
 }
 

@@ -11,6 +11,7 @@ import { config } from '../config';
 import { ClaudeProcessManager } from '../services/claude/ClaudeProcessManager';
 import { GeminiService } from '../services/gemini';
 import { getTodosBySessionId } from '../db/todos';
+import { pendingActionsQueue } from '../services/pendingActionsQueue';
 
 // Global reference to the process manager for use by routes
 let _processManager: ClaudeProcessManager | null = null;
@@ -44,6 +45,9 @@ export function setupWebSocket(httpServer: HttpServer): Server {
   const processManager = new ClaudeProcessManager(io);
   _processManager = processManager; // Store global reference for routes
   const geminiService = new GeminiService(io);
+
+  // Initialize the pending actions queue with the socket server
+  pendingActionsQueue.setSocketServer(io);
 
   // Check Gemini CLI availability on startup
   geminiService.checkAvailability().then((result) => {

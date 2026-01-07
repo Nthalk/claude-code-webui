@@ -126,6 +126,14 @@ export interface PendingPlanApproval {
   planPath?: string;     // Path to the plan file
 }
 
+// Pending commit approval request
+export interface PendingCommitApproval {
+  sessionId: string;
+  requestId: string;
+  commitMessage: string;
+  gitStatus: string;
+}
+
 // User question option for AskUserQuestion tool
 export interface UserQuestionOption {
   label: string;
@@ -200,6 +208,8 @@ export interface ServerToClientEvents {
   'session:question_resolved': (data: { sessionId: string; requestId: string }) => void;
   'session:plan_approval_request': (data: PendingPlanApproval) => void;
   'session:plan_approval_resolved': (data: { sessionId: string; requestId: string }) => void;
+  'session:commit_approval_request': (data: PendingCommitApproval) => void;
+  'session:commit_approval_resolved': (data: { sessionId: string; requestId: string }) => void;
   'session:compacting': (data: { sessionId: string; isCompacting: boolean }) => void;
   'session:compact_boundary': (data: { sessionId: string; metadata: CompactMetadata }) => void;
   'session:command_output': (data: { sessionId: string; output: string }) => void;

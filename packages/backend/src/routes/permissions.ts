@@ -5,6 +5,7 @@ import { requireAuth } from '../middleware/auth';
 import { AppError } from '../middleware/errorHandler';
 import { addPatternToSettings } from './claude-settings';
 import { getDatabase } from '../db';
+import { pendingActionsQueue } from '../services/pendingActionsQueue';
 
 const router = Router();
 
@@ -97,9 +98,8 @@ router.post('/request', async (req: Request, res: Response) => {
 
   pendingRequests.set(requestId, pendingRequest);
 
-  // Get Socket.IO instance and emit to frontend
-  const io: Server = req.app.get('io');
-  io.to(`session:${sessionId}`).emit('session:permission_request', {
+  // Add to queue instead of directly emitting
+  pendingActionsQueue.addAction(sessionId, 'permission', requestId, {
     sessionId,
     requestId,
     toolName,
@@ -234,6 +234,9 @@ router.post('/respond', requireAuth, async (req: Request, res: Response) => {
   }
 
   console.log(`[PERMISSIONS] User responded to ${requestId}: ${action}`);
+
+  // Notify the queue that this action is resolved
+  pendingActionsQueue.resolveAction(request.sessionId, requestId);
 
   // Broadcast to all clients that this permission was resolved
   // This dismisses the dialog on other tabs/devices

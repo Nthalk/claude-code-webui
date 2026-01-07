@@ -17,6 +17,7 @@ import { z } from 'zod';
 import type { Server } from 'socket.io';
 import { requireAuth } from '../middleware/auth';
 import { AppError } from '../middleware/errorHandler';
+import { pendingActionsQueue } from '../services/pendingActionsQueue';
 
 const router = Router();
 
@@ -121,9 +122,8 @@ router.post('/request', async (req: Request, res: Response) => {
 
   pendingQuestions.set(requestId, pendingRequest);
 
-  // Get Socket.IO instance and emit to frontend
-  const io: Server = req.app.get('io');
-  io.to(`session:${sessionId}`).emit('session:question_request', {
+  // Add to queue instead of directly emitting
+  pendingActionsQueue.addAction(sessionId, 'question', requestId, {
     sessionId,
     requestId,
     questions,
@@ -215,6 +215,9 @@ router.post('/respond', requireAuth, async (req: Request, res: Response) => {
   request.answers = answers;
 
   console.log(`[USER-QUESTIONS] User answered ${requestId}:`, JSON.stringify(answers));
+
+  // Notify the queue that this action is resolved
+  pendingActionsQueue.resolveAction(request.sessionId, requestId);
 
   // Broadcast to all clients that this question was resolved
   // This dismisses the dialog on other tabs/devices
