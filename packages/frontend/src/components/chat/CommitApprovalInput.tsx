@@ -161,11 +161,11 @@ export function CommitApprovalInput({ onRespond, commitMessage, gitStatus }: Com
   }
 
   return (
-    <div className="flex flex-col gap-3 px-1">
+    <div className="flex flex-col h-full max-h-[600px] px-1">
       {/* Info banner - Clickable header */}
       <div
         onClick={() => setIsExpanded(!isExpanded)}
-        className="flex items-center gap-3 p-3 rounded-lg bg-blue-500/10 border border-blue-500/30 cursor-pointer hover:bg-blue-500/15 transition-colors"
+        className="flex items-center gap-3 p-3 rounded-lg bg-blue-500/10 border border-blue-500/30 cursor-pointer hover:bg-blue-500/15 transition-colors shrink-0"
       >
         <div className="p-1.5 bg-blue-500/20 rounded-lg shrink-0">
           <GitCommit className="h-5 w-5 text-blue-500" />
@@ -192,103 +192,109 @@ export function CommitApprovalInput({ onRespond, commitMessage, gitStatus }: Com
       {/* Content sections - only show when expanded */}
       {isExpanded && (
         <>
-          {/* Commit message */}
-          <div className="border border-border rounded-lg overflow-hidden">
-        <button
-          onClick={() => setShowCommitMessage(!showCommitMessage)}
-          className="w-full p-3 bg-muted/30 hover:bg-muted/50 flex items-center justify-between text-sm font-medium transition-colors"
-        >
-          <span>Commit Message</span>
-          {showCommitMessage ? (
-            <ChevronUp className="h-4 w-4 text-muted-foreground" />
-          ) : (
-            <ChevronDown className="h-4 w-4 text-muted-foreground" />
-          )}
-        </button>
-        {showCommitMessage && (
-          <div className="p-3 bg-background border-t border-border">
-            <pre className="text-sm font-mono text-muted-foreground whitespace-pre-wrap break-words">
-              {commitMessage}
-            </pre>
+          {/* Scrollable content area */}
+          <div className="flex-1 overflow-y-auto py-3 space-y-3">
+            {/* Commit message */}
+            <div className="border border-border rounded-lg overflow-hidden">
+              <button
+                onClick={() => setShowCommitMessage(!showCommitMessage)}
+                className="w-full p-3 bg-muted/30 hover:bg-muted/50 flex items-center justify-between text-sm font-medium transition-colors"
+              >
+                <span>Commit Message</span>
+                {showCommitMessage ? (
+                  <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                ) : (
+                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                )}
+              </button>
+              {showCommitMessage && (
+                <div className="p-3 bg-background border-t border-border">
+                  <pre className="text-sm font-mono text-muted-foreground whitespace-pre-wrap break-words">
+                    {commitMessage}
+                  </pre>
+                </div>
+              )}
+            </div>
+
+            {/* Git status */}
+            <div className="border border-border rounded-lg overflow-hidden">
+              <button
+                onClick={() => setShowGitStatus(!showGitStatus)}
+                className="w-full p-3 bg-muted/30 hover:bg-muted/50 flex items-center justify-between text-sm font-medium transition-colors"
+              >
+                <span>Git Status ({statusItems.length} {statusItems.length === 1 ? 'change' : 'changes'})</span>
+                {showGitStatus ? (
+                  <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                ) : (
+                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                )}
+              </button>
+              {showGitStatus && (
+                <div className="max-h-64 overflow-y-auto p-3 bg-background">
+                  {statusItems.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No changes detected</p>
+                  ) : (
+                    <div className="space-y-1">
+                      {statusItems.map((item, index) => (
+                        <div key={index} className="flex items-center gap-2 text-sm font-mono">
+                          <span className={`
+                            px-1.5 py-0.5 rounded text-xs font-bold uppercase
+                            ${item.action === 'modified' ? 'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400' : ''}
+                            ${item.action === 'added' ? 'bg-green-500/20 text-green-600 dark:text-green-400' : ''}
+                            ${item.action === 'deleted' ? 'bg-red-500/20 text-red-600 dark:text-red-400' : ''}
+                            ${item.action === 'renamed' ? 'bg-blue-500/20 text-blue-600 dark:text-blue-400' : ''}
+                            ${item.action === 'untracked' ? 'bg-gray-500/20 text-gray-600 dark:text-gray-400' : ''}
+                            ${!['modified', 'added', 'deleted', 'renamed', 'untracked'].includes(item.action) ? 'bg-muted text-muted-foreground' : ''}
+                          `}>
+                            {item.action}
+                          </span>
+                          <span className="text-muted-foreground">{item.file}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
-        )}
-      </div>
 
-      {/* Git status */}
-      <div className="border border-border rounded-lg overflow-hidden">
-        <button
-          onClick={() => setShowGitStatus(!showGitStatus)}
-          className="w-full p-3 bg-muted/30 hover:bg-muted/50 flex items-center justify-between text-sm font-medium transition-colors"
-        >
-          <span>Git Status ({statusItems.length} {statusItems.length === 1 ? 'change' : 'changes'})</span>
-          {showGitStatus ? (
-            <ChevronUp className="h-4 w-4 text-muted-foreground" />
-          ) : (
-            <ChevronDown className="h-4 w-4 text-muted-foreground" />
-          )}
-        </button>
-        {showGitStatus && (
-          <div className="max-h-64 overflow-y-auto p-3 bg-background">
-            {statusItems.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No changes detected</p>
-            ) : (
-              <div className="space-y-1">
-                {statusItems.map((item, index) => (
-                  <div key={index} className="flex items-center gap-2 text-sm font-mono">
-                    <span className={`
-                      px-1.5 py-0.5 rounded text-xs font-bold uppercase
-                      ${item.action === 'modified' ? 'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400' : ''}
-                      ${item.action === 'added' ? 'bg-green-500/20 text-green-600 dark:text-green-400' : ''}
-                      ${item.action === 'deleted' ? 'bg-red-500/20 text-red-600 dark:text-red-400' : ''}
-                      ${item.action === 'renamed' ? 'bg-blue-500/20 text-blue-600 dark:text-blue-400' : ''}
-                      ${item.action === 'untracked' ? 'bg-gray-500/20 text-gray-600 dark:text-gray-400' : ''}
-                      ${!['modified', 'added', 'deleted', 'renamed', 'untracked'].includes(item.action) ? 'bg-muted text-muted-foreground' : ''}
-                    `}>
-                      {item.action}
-                    </span>
-                    <span className="text-muted-foreground">{item.file}</span>
-                  </div>
-                ))}
-              </div>
-            )}
+          {/* Fixed bottom section */}
+          <div className="shrink-0 pt-3 space-y-3 border-t border-border">
+            {/* Push option */}
+            <label className="flex items-center gap-2 p-2 rounded-lg bg-muted/30 cursor-pointer hover:bg-muted/50 transition-colors">
+              <input
+                type="checkbox"
+                checked={wantsPush}
+                onChange={(e) => setWantsPush(e.target.checked)}
+                disabled={isSubmitting}
+                className="rounded border-border text-primary focus:ring-primary"
+              />
+              <span className="text-sm font-medium">Push to remote after commit</span>
+              <Upload className="h-4 w-4 text-muted-foreground ml-auto" />
+            </label>
+
+            {/* Action buttons */}
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                type="button"
+                onClick={() => handleApprove(wantsPush)}
+                disabled={isSubmitting}
+                className="h-11 bg-green-600 hover:bg-green-700 text-white font-medium"
+              >
+                <CheckCircle2 className="h-4 w-4 mr-2" />
+                Approve
+              </Button>
+              <Button
+                type="button"
+                onClick={() => setMode('reason')}
+                disabled={isSubmitting}
+                className="h-11 bg-red-600 hover:bg-red-700 text-white font-medium"
+              >
+                <XCircle className="h-4 w-4 mr-2" />
+                Deny
+              </Button>
+            </div>
           </div>
-        )}
-      </div>
-
-      {/* Push option */}
-      <label className="flex items-center gap-2 p-2 rounded-lg bg-muted/30 cursor-pointer hover:bg-muted/50 transition-colors">
-        <input
-          type="checkbox"
-          checked={wantsPush}
-          onChange={(e) => setWantsPush(e.target.checked)}
-          disabled={isSubmitting}
-          className="rounded border-border text-primary focus:ring-primary"
-        />
-        <span className="text-sm font-medium">Push to remote after commit</span>
-        <Upload className="h-4 w-4 text-muted-foreground ml-auto" />
-      </label>
-
-      {/* Action buttons */}
-      <div className="grid grid-cols-2 gap-2">
-        <Button
-          type="button"
-          onClick={() => handleApprove(wantsPush)}
-          disabled={isSubmitting}
-          className="h-11 bg-green-600 hover:bg-green-700 text-white font-medium"
-        >
-          <CheckCircle2 className="h-4 w-4 mr-2" />
-          Approve
-        </Button>
-        <Button
-          type="button"
-          onClick={() => setMode('reason')}
-          disabled={isSubmitting}
-          className="h-11 bg-red-600 hover:bg-red-700 text-white font-medium"
-        >
-          <XCircle className="h-4 w-4 mr-2" />
-          Deny
-        </Button>
-      </div>
         </>
       )}
     </div>
