@@ -23,6 +23,20 @@ export interface BufferedMessage {
 // Permission response action type
 export type PermissionAction = 'allow_once' | 'allow_project' | 'allow_global' | 'deny';
 
+// Permission decision for debug/history tracking
+export interface PermissionHistoryDecision {
+  id: string;
+  sessionId: string;
+  timestamp: number;
+  toolName: string;
+  toolInput: unknown;
+  decision: 'allow' | 'deny';
+  reason: 'pattern' | 'mode' | 'user';
+  matchedPattern?: string;
+  mode?: string;
+  duration?: number;
+}
+
 // Client to Server Events
 export interface ClientToServerEvents {
   'heartbeat': (data: { sessionId: string }) => void;
@@ -221,6 +235,8 @@ export interface ServerToClientEvents {
   'heartbeat': (data: { sessionId: string; status: 'ok' | 'not_found' }) => void;
   'debug:claude:message': (data: { sessionId: string; message: any }) => void;
   'debug:claude:sent': (data: { sessionId: string; message: any }) => void;
+  'permission:decision': (data: { sessionId: string; decision: PermissionHistoryDecision }) => void;
+  'permission:cleared': (data: { sessionId: string }) => void;
   error: (message: string) => void;
 }
 

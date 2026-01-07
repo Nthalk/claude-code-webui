@@ -410,6 +410,11 @@ router.delete('/:id/messages', requireAuth, async (req, res) => {
     .prepare('DELETE FROM tool_executions WHERE session_id = ?')
     .run(req.params.id);
 
+  // Delete todos for this session
+  const todosResult = db
+    .prepare('DELETE FROM todos WHERE session_id = ?')
+    .run(req.params.id);
+
   // Broadcast to all subscribers so they can refresh their UI
   const io: Server = req.app.get('io');
   io.to(`session:${req.params.id}`).emit('session:cleared', {
@@ -421,6 +426,7 @@ router.delete('/:id/messages', requireAuth, async (req, res) => {
     data: {
       deletedMessages: messagesResult.changes,
       deletedToolExecutions: toolsResult.changes,
+      deletedTodos: todosResult.changes,
     },
   });
 });

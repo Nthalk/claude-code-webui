@@ -31,6 +31,7 @@ import {URL} from 'url';
 import * as crypto from 'crypto';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { PermissionMatcher } from '../utils/permission-matcher';
 
 const execAsync = promisify(exec);
 
@@ -123,6 +124,7 @@ interface ClaudeSettings {
         allow?: string[];
         deny?: string[];
     };
+    [key: string]: unknown;
 }
 
 // Load settings from a JSON file
@@ -138,158 +140,29 @@ function loadSettings(filePath: string): ClaudeSettings | null {
     return null;
 }
 
-// Get all allowed patterns from global and project settings
-function getAllowedPatterns(projectPath?: string): string[] {
-    const patterns: string[] = [];
+// Get all permission patterns from global and project settings
+function getAllPermissionPatterns(projectPath?: string): { allow: string[]; deny: string[] } {
+    const settings: (ClaudeSettings | null)[] = [];
 
     // Load global settings (~/.claude/settings.json and ~/.claude/settings.local.json)
     const globalSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-    const globalSettings = loadSettings(globalSettingsPath);
-    if (globalSettings?.permissions?.allow) {
-        patterns.push(...globalSettings.permissions.allow);
-        log(`Loaded ${globalSettings.permissions.allow.length} patterns from global settings`);
-    }
+    settings.push(loadSettings(globalSettingsPath));
 
     const globalLocalPath = path.join(os.homedir(), '.claude', 'settings.local.json');
-    const globalLocalSettings = loadSettings(globalLocalPath);
-    if (globalLocalSettings?.permissions?.allow) {
-        patterns.push(...globalLocalSettings.permissions.allow);
-        log(`Loaded ${globalLocalSettings.permissions.allow.length} patterns from global local settings`);
-    }
+    settings.push(loadSettings(globalLocalPath));
 
     // Load project settings (<project>/.claude/settings.json and .claude/settings.local.json)
     if (projectPath) {
         const projectSettingsPath = path.join(projectPath, '.claude', 'settings.json');
-        const projectSettings = loadSettings(projectSettingsPath);
-        if (projectSettings?.permissions?.allow) {
-            patterns.push(...projectSettings.permissions.allow);
-            log(`Loaded ${projectSettings.permissions.allow.length} patterns from project settings`);
-        }
+        settings.push(loadSettings(projectSettingsPath));
 
         const projectLocalPath = path.join(projectPath, '.claude', 'settings.local.json');
-        const projectLocalSettings = loadSettings(projectLocalPath);
-        if (projectLocalSettings?.permissions?.allow) {
-            patterns.push(...projectLocalSettings.permissions.allow);
-            log(`Loaded ${projectLocalSettings.permissions.allow.length} patterns from project local settings`);
-        }
+        settings.push(loadSettings(projectLocalPath));
     }
 
+    const patterns = PermissionMatcher.loadPatterns(settings);
+    log(`Loaded ${patterns.allow.length} allow patterns and ${patterns.deny.length} deny patterns`);
     return patterns;
-}
-
-// Tools that operate on files and should use glob patterns
-const FILE_TOOLS = ['Read', 'Write', 'Edit', 'Glob'];
-
-// Tools that use prefix matching with :*
-const PREFIX_TOOLS = ['Bash'];
-
-// Get the value to match against for a given tool
-function getMatchValue(toolName: string, toolInput: unknown): string {
-    if (!toolInput || typeof toolInput !== 'object') {
-        return '';
-    }
-
-    const inputObj = toolInput as Record<string, unknown>;
-
-    switch (toolName) {
-        case 'Bash':
-            return String(inputObj.command || '');
-        case 'Read':
-        case 'Write':
-        case 'Edit':
-        case 'Glob':
-            return String(inputObj.file_path || inputObj.pattern || '');
-        case 'Grep':
-            return String(inputObj.pattern || '');
-        case 'WebFetch':
-            return String(inputObj.url || '');
-        case 'WebSearch':
-            return String(inputObj.query || '');
-        default:
-            return '';
-    }
-}
-
-// Convert glob pattern to regex for file matching
-function globToRegex(glob: string): RegExp {
-    let regex = glob
-        // Escape special regex chars except * and ?
-        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-        // ** matches any path (including /)
-        .replace(/\*\*/g, '.*')
-        // * matches anything except /
-        .replace(/(?<!\.)(\*)(?!\*)/g, '[^/]*')
-        // ? matches single char
-        .replace(/\?/g, '.');
-
-    return new RegExp(`^${regex}$`);
-}
-
-// Check if a tool invocation matches a pattern
-function matchesPattern(pattern: string, toolName: string, toolInput: unknown): boolean {
-    // Parse pattern: Tool(content)
-    const match = pattern.match(/^(\w+)\((.*)\)$/);
-    if (!match) {
-        // Simple pattern like "Bash" matches all Bash calls
-        return pattern === toolName;
-    }
-
-    const [, patternTool, patternContent] = match;
-
-    // Tool name must match
-    if (patternTool !== toolName) {
-        return false;
-    }
-
-    // Empty content matches everything for this tool
-    if (!patternContent) {
-        return true;
-    }
-
-    // Get the value to match against
-    const matchValue = getMatchValue(toolName, toolInput);
-
-    // For Bash and other prefix tools, use :* prefix matching
-    if (PREFIX_TOOLS.includes(toolName) && patternContent.endsWith(':*')) {
-        const prefix = patternContent.slice(0, -2);
-        if (!prefix) {
-            return true; // :* alone matches everything
-        }
-        return matchValue.startsWith(prefix);
-    }
-
-    // For file tools, use glob matching
-    if (FILE_TOOLS.includes(toolName)) {
-        // Check if it contains glob wildcards
-        if (patternContent.includes('*') || patternContent.includes('?')) {
-            const regex = globToRegex(patternContent);
-            return regex.test(matchValue);
-        }
-        // Exact match fallback
-        return matchValue === patternContent;
-    }
-
-    // Default: prefix matching with :*
-    if (patternContent.endsWith(':*')) {
-        const prefix = patternContent.slice(0, -2);
-        if (!prefix) {
-            return true;
-        }
-        return matchValue.startsWith(prefix);
-    }
-
-    // Exact match
-    return matchValue === patternContent;
-}
-
-// Check if tool is auto-approved by any pattern
-function isAutoApproved(toolName: string, toolInput: unknown, patterns: string[]): string | null {
-    for (const pattern of patterns) {
-        if (matchesPattern(pattern, toolName, toolInput)) {
-            return pattern;
-        }
-    }
-    return null;
 }
 
 // HTTP request helper
@@ -1135,24 +1008,47 @@ class WebUIMcpServer {
                     // Skip pattern checking and go straight to user prompt
                 } else {
                     // Check for auto-approval against settings files
-                    const allowedPatterns = getAllowedPatterns(this.projectPath);
-                    log(`Loaded ${allowedPatterns.length} allowed patterns for auto-approval check`);
+                    const patterns = getAllPermissionPatterns(this.projectPath);
+                    const matchResult = PermissionMatcher.checkPatterns(
+                        toolName,
+                        toolInput,
+                        patterns.allow,
+                        patterns.deny
+                    );
 
-                    const matchedPattern = isAutoApproved(toolName, toolInput, allowedPatterns);
-                    if (matchedPattern) {
-                        log(`Auto-approved ${toolName} by pattern: ${matchedPattern}`);
-                        return {
-                            jsonrpc: '2.0',
-                            id,
-                            result: {
-                                content: [
-                                    {
-                                        type: 'text',
-                                        text: JSON.stringify({behavior: 'allow', updatedInput: toolInput}),
-                                    },
-                                ],
-                            },
-                        };
+                    if (matchResult.matched) {
+                        if (matchResult.type === 'allow') {
+                            log(`Auto-approved ${toolName} by pattern: ${matchResult.pattern}`);
+                            return {
+                                jsonrpc: '2.0',
+                                id,
+                                result: {
+                                    content: [
+                                        {
+                                            type: 'text',
+                                            text: JSON.stringify({behavior: 'allow', updatedInput: toolInput}),
+                                        },
+                                    ],
+                                },
+                            };
+                        } else {
+                            log(`Auto-denied ${toolName} by pattern: ${matchResult.pattern}`);
+                            return {
+                                jsonrpc: '2.0',
+                                id,
+                                result: {
+                                    content: [
+                                        {
+                                            type: 'text',
+                                            text: JSON.stringify({
+                                                behavior: 'deny',
+                                                message: `Denied by pattern: ${matchResult.pattern}`
+                                            }),
+                                        },
+                                    ],
+                                },
+                            };
+                        }
                     }
                 }
 

@@ -1,12 +1,7 @@
-import type {Server} from 'socket.io';
 import type {
     BufferedMessage,
-    ClientToServerEvents,
-    InterServerEvents,
     ModelType,
-    ServerToClientEvents,
     SessionMode,
-    SocketData,
 } from '@claude-code-webui/shared';
 import {getDatabase} from '../../db';
 import {replaceTodos, deleteTodosBySessionId} from '../../db/todos.js';
@@ -18,48 +13,16 @@ import {fileURLToPath} from 'url';
 import {ChildProcess, spawn as cpSpawn} from 'child_process';
 import {config} from '../../config';
 import {getHookJson} from './hooks';
+import {ClaudeManager, CircularBuffer} from './ClaudeManager';
+import type {ImageData, SessionOptions, SocketIOServer} from './types';
+import {MODEL_IDS} from './types';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Circular buffer for storing messages for reconnection
+// Buffer size and disconnect timeout
 const BUFFER_SIZE = 5000;
 const DISCONNECT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
-
-class CircularBuffer<T> {
-    private buffer: T[] = [];
-    private maxSize: number;
-
-    constructor(maxSize: number) {
-        this.maxSize = maxSize;
-    }
-
-    push(item: T): void {
-        if (this.buffer.length >= this.maxSize) {
-            this.buffer.shift();
-        }
-        this.buffer.push(item);
-    }
-
-    getAll(): T[] {
-        return [...this.buffer];
-    }
-
-    getSince(predicate: (item: T) => boolean): T[] {
-        const startIndex = this.buffer.findIndex(predicate);
-        if (startIndex === -1) return [];
-        return this.buffer.slice(startIndex);
-    }
-
-    clear(): void {
-        this.buffer = [];
-    }
-}
-
-interface ImageData {
-    data: string; // base64
-    mimeType: string;
-}
 
 interface UsageInfo {
     input_tokens?: number;
@@ -182,27 +145,24 @@ interface ClaudeProcess {
     relayContextMessage: number;
 }
 
-const MODEL_IDS: Record<ModelType, string> = {
-    opus: 'claude-opus-4-20250514',
-    sonnet: 'claude-sonnet-4-20250514',
-    haiku: 'claude-haiku-3-5-20241022',
-};
-
-export class ClaudeProcessManager {
+export class ClaudeProcessManager extends ClaudeManager {
     private processes: Map<string, ClaudeProcess> = new Map();
-    private pendingModes: Map<string, SessionMode> = new Map(); // Store modes for sessions not yet started
-    private pendingModels: Map<string, ModelType> = new Map(); // Store models for sessions not yet started
-    private io: Server<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>;
 
-    constructor(
-        io: Server<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>
-    ) {
-        this.io = io;
+    constructor(io: SocketIOServer) {
+        super(io);
 
         // Start cleanup timer for disconnected sessions (every 60 seconds)
         setInterval(() => {
             this.cleanupDisconnectedSessions();
         }, 60 * 1000);
+    }
+
+    /**
+     * Check if a session is currently compacting
+     */
+    protected override isCompacting(sessionId: string): boolean {
+        const proc = this.processes.get(sessionId);
+        return proc?.isCompacting ?? false;
     }
 
 
@@ -347,7 +307,7 @@ export class ClaudeProcessManager {
         }, 2000);
     }
 
-    async startSession(sessionId: string, userId: string, mode?: SessionMode, model?: ModelType): Promise<void> {
+    async startSession(sessionId: string, userId: string, options?: SessionOptions): Promise<void> {
         const db = getDatabase();
 
         const session = db
@@ -368,12 +328,12 @@ export class ClaudeProcessManager {
         }
 
         // Use provided mode, or pending mode, or session's stored mode, or default to 'auto-accept'
-        const effectiveMode = mode ?? this.pendingModes.get(sessionId) ?? (session.mode as SessionMode) ?? 'auto-accept';
+        const effectiveMode = options?.mode ?? this.pendingModes.get(sessionId) ?? (session.mode as SessionMode) ?? 'auto-accept';
         this.pendingModes.delete(sessionId); // Clear pending mode once used
         console.log(`[MODE] Starting session ${sessionId} with mode ${effectiveMode}`);
 
         // Use provided model, or pending model, or session's stored model, or default to 'opus'
-        const effectiveModel: ModelType = model ?? this.pendingModels.get(sessionId) ?? (session.model as ModelType) ?? 'opus';
+        const effectiveModel: ModelType = options?.model ?? this.pendingModels.get(sessionId) ?? (session.model as ModelType) ?? 'opus';
         this.pendingModels.delete(sessionId); // Clear pending model once used
         const modelId = MODEL_IDS[effectiveModel];
         console.log(`[MODEL] Starting session ${sessionId} with model ${effectiveModel} (${modelId})`);
@@ -1411,133 +1371,8 @@ export class ClaudeProcessManager {
         }
     }
 
-    private saveAssistantMessage(sessionId: string, content: string): void {
-        const proc = this.processes.get(sessionId);
-
-        // Suppress messages during auto-compacting
-        if (proc?.isCompacting) {
-            console.log(`[AUTO-COMPACT] Suppressing assistant message during compaction`);
-            return;
-        }
-
-        // Handle conversation resumed message
-        if (content.trim() === 'Conversation resumed successfully.' ||
-            content.trim().startsWith('Conversation resumed')) {
-            console.log(`[RESUME] Converting conversation resumed to meta message`);
-            this.saveMetaMessage(sessionId, 'resume', {});
-            return;
-        }
-
-        const db = getDatabase();
-        const messageId = nanoid();
-        const createdAt = new Date().toISOString();
-
-        // Use explicit createdAt to ensure millisecond precision for proper ordering
-        db.prepare('INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)').run(
-            messageId,
-            sessionId,
-            'assistant',
-            content,
-            createdAt
-        );
-        db.prepare('UPDATE sessions SET last_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
-            content.substring(0, 200),
-            sessionId
-        );
-
-        this.io.to(`session:${sessionId}`).emit('session:message', {
-            id: messageId,
-            sessionId,
-            role: 'assistant',
-            content,
-            createdAt,
-        });
-
-        console.log(`Saved assistant message [${sessionId}]: ${content.substring(0, 100)}...`);
-    }
-
-    private saveMetaMessage(sessionId: string, metaType: 'compact' | 'resume' | 'restart' | 'command_output', metaData: any): void {
-        const db = getDatabase();
-        const messageId = nanoid();
-        const createdAt = new Date().toISOString();
-
-        // Insert meta message with serialized metadata
-        db.prepare('INSERT INTO messages (id, session_id, role, content, created_at, meta_type, meta_data) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
-            messageId,
-            sessionId,
-            'meta',
-            '', // Meta messages have empty content
-            createdAt,
-            metaType,
-            JSON.stringify(metaData)
-        );
-
-        // Emit meta message to frontend
-        this.io.to(`session:${sessionId}`).emit('session:message', {
-            id: messageId,
-            sessionId,
-            role: 'meta',
-            content: '',
-            createdAt,
-            metaType,
-            metaData,
-        });
-
-        console.log(`Saved meta message [${sessionId}]: ${metaType}`, metaData);
-    }
-
-    private saveToolExecution(
-        sessionId: string,
-        toolId: string,
-        toolName: string,
-        input?: unknown,
-        status: 'started' | 'completed' | 'error' = 'started'
-    ): void {
-        const db = getDatabase();
-        const inputStr = input ? JSON.stringify(input) : null;
-        const createdAt = new Date().toISOString();
-
-        // Use explicit createdAt to ensure millisecond precision for proper ordering
-        db.prepare(
-            'INSERT INTO tool_executions (id, session_id, tool_name, input, status, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-        ).run(toolId, sessionId, toolName, inputStr, status, createdAt);
-
-        console.log(`[TOOL DB] Saved tool execution: ${toolName} (${toolId}) - ${status}`);
-    }
-
-    private updateToolExecution(
-        toolId: string,
-        updates: { status?: 'started' | 'completed' | 'error'; result?: string; error?: string; input?: unknown }
-    ): void {
-        const db = getDatabase();
-        const setClauses: string[] = [];
-        const values: unknown[] = [];
-
-        if (updates.status) {
-            setClauses.push('status = ?');
-            values.push(updates.status);
-        }
-        if (updates.result !== undefined) {
-            setClauses.push('result = ?');
-            values.push(updates.result);
-        }
-        if (updates.error !== undefined) {
-            setClauses.push('error = ?');
-            values.push(updates.error);
-        }
-        if (updates.input !== undefined) {
-            setClauses.push('input = ?');
-            values.push(JSON.stringify(updates.input));
-        }
-
-        if (setClauses.length > 0) {
-            values.push(toolId);
-            db.prepare(`UPDATE tool_executions
-                        SET ${setClauses.join(', ')}
-                        WHERE id = ?`).run(...values);
-            console.log(`[TOOL DB] Updated tool execution: ${toolId}`);
-        }
-    }
+    // Note: saveAssistantMessage, saveMetaMessage, saveToolExecution, updateToolExecution
+    // are inherited from ClaudeManager base class
 
     async sendMessage(
         sessionId: string,
@@ -1884,7 +1719,7 @@ This is the project you should be working on. All file operations should be rela
         await new Promise(resolve => setTimeout(resolve, 500));
 
         // Start fresh with the same mode
-        await this.startSession(sessionId, userId, currentMode);
+        await this.startSession(sessionId, userId, {mode: currentMode});
 
         // Save restart meta message
         this.saveMetaMessage(sessionId, 'restart', {time: new Date().toISOString()});
@@ -1917,7 +1752,7 @@ This is the project you should be working on. All file operations should be rela
 
         // Start the session - it will automatically resume from previous context
         // because we're keeping the claude_session_id
-        await this.startSession(sessionId, userId, mode);
+        await this.startSession(sessionId, userId, {mode});
 
         // Save resume meta message to indicate the conversation was resumed
         this.saveMetaMessage(sessionId, 'resume', { time: new Date().toISOString() });
@@ -1989,7 +1824,7 @@ This is the project you should be working on. All file operations should be rela
         setTimeout(async () => {
             this.processes.delete(sessionId);
             try {
-                await this.startSession(sessionId, userId, mode);
+                await this.startSession(sessionId, userId, {mode});
                 console.log(`[MODE] Session ${sessionId} restarted with mode ${mode}`);
                 // Emit mode changed event on success
                 this.io.emit('session:mode_changed', {
@@ -2068,7 +1903,7 @@ This is the project you should be working on. All file operations should be rela
         setTimeout(async () => {
             this.processes.delete(sessionId);
             try {
-                await this.startSession(sessionId, userId, proc.mode, model);
+                await this.startSession(sessionId, userId, {mode: proc.mode, model});
                 console.log(`[MODEL] Session ${sessionId} restarted with model ${model}`);
                 // Emit model changed event on success
                 this.io.emit('session:model_changed', {
@@ -2114,29 +1949,7 @@ This is the project you should be working on. All file operations should be rela
         return Array.from(this.processes.keys());
     }
 
-    private parseContextOutput(content: string): {
-        model?: string;
-        tokens?: number;
-        contextWindow?: number;
-        usedPercent?: number;
-    } | null {
-        // Match the model line
-        const modelMatch = content.match(/\*\*Model:\*\*\s+(\S+)/);
-
-        // Match the tokens line (e.g., "66.6k / 200.0k (33%)")
-        const tokensMatch = content.match(/\*\*Tokens:\*\*\s+([\d.]+)k\s*\/\s*([\d.]+)k\s*\((\d+)%\)/);
-
-        if (modelMatch && modelMatch[1] && tokensMatch && tokensMatch[1] && tokensMatch[2] && tokensMatch[3]) {
-            return {
-                model: modelMatch[1],
-                tokens: parseFloat(tokensMatch[1]) * 1000,
-                contextWindow: parseFloat(tokensMatch[2]) * 1000,
-                usedPercent: parseInt(tokensMatch[3])
-            };
-        }
-
-        return null;
-    }
+    // Note: parseContextOutput is inherited from ClaudeManager base class
 
     private processQueuedMessages(sessionId: string): void {
         const proc = this.processes.get(sessionId);

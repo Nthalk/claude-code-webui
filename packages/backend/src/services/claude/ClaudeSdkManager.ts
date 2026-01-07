@@ -27,6 +27,11 @@ import type {
     PlanApprovalRequest,
 } from './types';
 import {MODEL_IDS} from './types';
+import {PermissionMatcher} from '../../utils/permission-matcher';
+import {permissionHistory} from '../permission-history';
+import * as fs from 'fs/promises';
+import * as path from 'path';
+import * as os from 'os';
 
 // Buffer size for reconnection
 const BUFFER_SIZE = 5000;
@@ -44,6 +49,10 @@ interface SdkSession {
     // SDK query instance
     query: Query | null;
     abortController: AbortController;
+
+    // Permission patterns from settings
+    allowPatterns: string[];
+    denyPatterns: string[];
 
     // Streaming input generator control
     inputResolvers: Array<{
@@ -91,7 +100,54 @@ export class ClaudeSdkManager extends ClaudeManager {
 
     constructor(io: SocketIOServer) {
         super(io);
+        // Set Socket.IO instance for permission history events
+        permissionHistory.setSocketIO(io);
         console.log('[SDK] ClaudeSdkManager initialized');
+    }
+
+    /**
+     * Load permission patterns from settings files
+     */
+    private async loadPermissionPatterns(workingDirectory: string): Promise<{allow: string[]; deny: string[]}> {
+        const settings: Array<{permissions?: {allow?: string[]; deny?: string[]}} | null> = [];
+
+        // Load global settings (~/.claude/settings.json)
+        const globalSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+        try {
+            const content = await fs.readFile(globalSettingsPath, 'utf-8');
+            settings.push(JSON.parse(content));
+        } catch {
+            settings.push(null);
+        }
+
+        // Load global local settings (~/.claude/settings.local.json)
+        const globalLocalPath = path.join(os.homedir(), '.claude', 'settings.local.json');
+        try {
+            const content = await fs.readFile(globalLocalPath, 'utf-8');
+            settings.push(JSON.parse(content));
+        } catch {
+            settings.push(null);
+        }
+
+        // Load project settings (<project>/.claude/settings.json)
+        const projectSettingsPath = path.join(workingDirectory, '.claude', 'settings.json');
+        try {
+            const content = await fs.readFile(projectSettingsPath, 'utf-8');
+            settings.push(JSON.parse(content));
+        } catch {
+            settings.push(null);
+        }
+
+        // Load project local settings (<project>/.claude/settings.local.json)
+        const projectLocalPath = path.join(workingDirectory, '.claude', 'settings.local.json');
+        try {
+            const content = await fs.readFile(projectLocalPath, 'utf-8');
+            settings.push(JSON.parse(content));
+        } catch {
+            settings.push(null);
+        }
+
+        return PermissionMatcher.loadPatterns(settings);
     }
 
     protected override isCompacting(sessionId: string): boolean {
@@ -133,6 +189,10 @@ export class ClaudeSdkManager extends ClaudeManager {
         // Create abort controller for this session
         const abortController = new AbortController();
 
+        // Load permission patterns from settings
+        const patterns = await this.loadPermissionPatterns(dbSession.working_directory);
+        console.log(`[SDK] Loaded ${patterns.allow.length} allow patterns and ${patterns.deny.length} deny patterns for session ${sessionId}`);
+
         // Create session state
         const session: SdkSession = {
             sessionId,
@@ -145,6 +205,8 @@ export class ClaudeSdkManager extends ClaudeManager {
             isCompacting: false,
             query: null,
             abortController,
+            allowPatterns: patterns.allow,
+            denyPatterns: patterns.deny,
             inputResolvers: [],
             pendingPermission: null,
             pendingQuestion: null,
@@ -184,15 +246,16 @@ export class ClaudeSdkManager extends ClaudeManager {
     private async createQuery(session: SdkSession, initialPrompt: string): Promise<void> {
         const {sessionId, workingDirectory, mode} = session;
 
-        // Determine permission mode for SDK
-        let permissionMode: 'default' | 'acceptEdits' | 'bypassPermissions' = 'default';
-        if (mode === 'danger') {
-            permissionMode = 'bypassPermissions';
-        } else if (mode === 'auto-accept') {
-            permissionMode = 'acceptEdits';
-        }
+        // IMPORTANT: Always use 'default' permissionMode so canUseTool is ALWAYS called.
+        // We handle our own permission logic (auto-accept, planning, danger) inside canUseTool.
+        //
+        // If we use 'acceptEdits' or 'bypassPermissions', the SDK auto-approves tools
+        // WITHOUT calling canUseTool, which means:
+        // - AskUserQuestion would be auto-approved without getting user answers
+        // - We lose control over permission handling
+        const permissionMode = 'default';
 
-        console.log(`[SDK] Creating query for session ${sessionId} with permissionMode=${permissionMode}`);
+        console.log(`[SDK] Creating query for session ${sessionId} with permissionMode=${permissionMode}, sessionMode=${mode}`);
 
         // Create the query with canUseTool for permission handling
         const q = query({
@@ -204,7 +267,7 @@ export class ClaudeSdkManager extends ClaudeManager {
                 includePartialMessages: true,
                 resume: session.claudeSessionId ?? undefined,
                 abortController: session.abortController,
-                allowDangerouslySkipPermissions: mode === 'danger',
+                // Don't use allowDangerouslySkipPermissions - we handle danger mode in canUseTool
                 canUseTool: async (toolName, input, {signal}) => {
                     return this.handleToolPermission(sessionId, toolName, input, signal);
                 },
@@ -220,7 +283,8 @@ export class ClaudeSdkManager extends ClaudeManager {
     }
 
     /**
-     * Handle tool permission requests via canUseTool callback
+     * Handle tool permission requests via canUseTool callback.
+     * This is called for ALL tool uses because we use permissionMode: 'default'.
      */
     private async handleToolPermission(
         sessionId: string,
@@ -230,10 +294,13 @@ export class ClaudeSdkManager extends ClaudeManager {
     ): Promise<PermissionResult> {
         const session = this.sessions.get(sessionId);
         if (!session) {
+            console.log(`[SDK] canUseTool: session ${sessionId} not found, denying`);
             return {behavior: 'deny', message: 'Session not found'};
         }
 
-        // Handle AskUserQuestion specially
+        console.log(`[SDK] canUseTool called: tool=${toolName}, mode=${session.mode}`);
+
+        // Handle AskUserQuestion - ALWAYS wait for user answers regardless of mode
         if (toolName === 'AskUserQuestion') {
             const questionInput = input as {
                 questions: Array<{
@@ -269,17 +336,53 @@ export class ClaudeSdkManager extends ClaudeManager {
                 });
             });
 
-            // Return with answers filled in
+            console.log(`[SDK] AskUserQuestion answers received:`, answers);
+
+            // Return with answers filled in (per SDK docs)
             return {
                 behavior: 'allow',
                 updatedInput: {
-                    ...questionInput,
-                    answers,
+                    questions: questionInput.questions,  // Pass through original questions
+                    answers,  // Add user's answers
                 },
             };
         }
 
-        // For other tools in planning mode, request user approval
+        // Check permission patterns BEFORE mode-based decisions
+        // This allows users to auto-approve tools even in planning mode
+        const startTime = Date.now();
+        const matchResult = PermissionMatcher.checkPatterns(
+            toolName,
+            input,
+            session.allowPatterns,
+            session.denyPatterns
+        );
+
+        if (matchResult.matched) {
+            const decision = matchResult.type === 'allow' ? 'allow' : 'deny';
+            permissionHistory.track({
+                id: nanoid(),
+                sessionId,
+                timestamp: Date.now(),
+                toolName,
+                toolInput: input,
+                decision,
+                reason: 'pattern',
+                matchedPattern: matchResult.pattern,
+                mode: session.mode,
+                duration: Date.now() - startTime,
+            });
+
+            if (matchResult.type === 'allow') {
+                console.log(`[SDK] Auto-approved ${toolName} by pattern: ${matchResult.pattern}`);
+                return {behavior: 'allow', updatedInput: input as Record<string, unknown>};
+            } else {
+                console.log(`[SDK] Auto-denied ${toolName} by pattern: ${matchResult.pattern}`);
+                return {behavior: 'deny', message: `Denied by pattern: ${matchResult.pattern}`};
+            }
+        }
+
+        // For planning mode, ask user for approval on all tools (no pattern matched)
         if (session.mode === 'planning') {
             console.log(`[SDK] Permission request for ${toolName} in planning mode`);
 
@@ -307,14 +410,41 @@ export class ClaudeSdkManager extends ClaudeManager {
                 });
             });
 
+            permissionHistory.track({
+                id: nanoid(),
+                sessionId,
+                timestamp: Date.now(),
+                toolName,
+                toolInput: input,
+                decision: approved ? 'allow' : 'deny',
+                reason: 'user',
+                mode: session.mode,
+                duration: Date.now() - startTime,
+            });
+
             if (approved) {
+                console.log(`[SDK] Tool ${toolName} approved by user`);
                 return {behavior: 'allow', updatedInput: input as Record<string, unknown>};
             } else {
+                console.log(`[SDK] Tool ${toolName} denied by user`);
                 return {behavior: 'deny', message: 'User denied permission'};
             }
         }
 
-        // Auto-accept and danger modes are handled by SDK's permissionMode
+        // For auto-accept and danger modes, auto-approve all tools
+        permissionHistory.track({
+            id: nanoid(),
+            sessionId,
+            timestamp: Date.now(),
+            toolName,
+            toolInput: input,
+            decision: 'allow',
+            reason: 'mode',
+            mode: session.mode,
+            duration: Date.now() - startTime,
+        });
+
+        console.log(`[SDK] Auto-approving ${toolName} (mode=${session.mode})`);
         return {behavior: 'allow', updatedInput: input as Record<string, unknown>};
     }
 
@@ -410,6 +540,8 @@ export class ClaudeSdkManager extends ClaudeManager {
 
     /**
      * Handle complete assistant message
+     * Note: Text content is already saved during streaming (in content_block_stop),
+     * so we only handle tool uses here to avoid duplicates.
      */
     private handleAssistantMessage(session: SdkSession, message: {
         type: 'assistant';
@@ -423,18 +555,12 @@ export class ClaudeSdkManager extends ClaudeManager {
     }): void {
         const {sessionId} = session;
 
-        // Extract text content
-        const textContent = message.message.content
-            .filter(block => block.type === 'text')
-            .map(block => block.text ?? '')
-            .join('');
+        // Note: Text content is NOT saved here because it's already saved
+        // during streaming in handleStreamEvent -> content_block_stop.
+        // With includePartialMessages: true, we get both streaming events
+        // AND this complete message, so saving here would cause duplicates.
 
-        if (textContent) {
-            // Save and emit the message
-            this.saveAssistantMessage(sessionId, textContent);
-        }
-
-        // Handle tool uses
+        // Handle tool uses (these aren't duplicated because we track by toolId)
         for (const block of message.message.content) {
             if (block.type === 'tool_use' && block.name && block.id) {
                 this.saveToolExecution(sessionId, block.id, block.name, block.input, 'started');
@@ -501,17 +627,21 @@ export class ClaudeSdkManager extends ClaudeManager {
 
             case 'content_block_delta':
                 if (event.delta?.type === 'text_delta' && event.delta.text) {
-                    session.currentText += event.delta.text;
+                    const deltaText = event.delta.text;
+                    session.currentText += deltaText;
+
+                    // Emit only the NEW delta text, not the full accumulated text
+                    // (Frontend appends deltas to build the complete message)
                     this.io.to(`session:${sessionId}`).emit('session:output', {
                         sessionId,
-                        content: session.currentText,
+                        content: deltaText,
                         isComplete: false,
                     });
 
-                    // Buffer for reconnection
+                    // Buffer the delta for reconnection
                     session.outputBuffer.push({
                         type: 'output',
-                        data: {content: session.currentText, isComplete: false},
+                        data: {content: deltaText, isComplete: false},
                         timestamp: Date.now(),
                     });
                 }
@@ -528,7 +658,22 @@ export class ClaudeSdkManager extends ClaudeManager {
                     });
                     session.currentText = '';
                 }
-                if (session.currentToolId) {
+                if (session.currentToolId && session.currentToolName) {
+                    // Mark the tool as completed
+                    this.updateToolExecution(session.currentToolId, {
+                        status: 'completed',
+                    });
+
+                    // Emit tool completion event
+                    this.io.to(`session:${sessionId}`).emit('session:tool_use', {
+                        sessionId,
+                        toolName: session.currentToolName,
+                        toolId: session.currentToolId,
+                        status: 'completed',
+                    });
+
+                    console.log(`[SDK] Tool ${session.currentToolName} (${session.currentToolId}) completed`);
+
                     session.currentToolId = null;
                     session.currentToolName = null;
                 }
@@ -679,6 +824,51 @@ export class ClaudeSdkManager extends ClaudeManager {
         this.saveMetaMessage(sessionId, 'resume', {time: new Date().toISOString()});
     }
 
+    /**
+     * Build initial prompt with project context for the first message.
+     * Loads CLAUDE.md and basic project info to give Claude context.
+     */
+    private async buildInitialPromptWithContext(session: SdkSession, userMessage: string): Promise<string> {
+        const {workingDirectory, claudeSessionId} = session;
+
+        // If resuming an existing session, don't add context (Claude already has it)
+        if (claudeSessionId) {
+            return userMessage;
+        }
+
+        const contextParts: string[] = [];
+
+        // Try to load CLAUDE.md from project root
+        const claudeMdPath = path.join(workingDirectory, 'CLAUDE.md');
+        try {
+            const claudeMdContent = await fs.readFile(claudeMdPath, 'utf-8');
+            contextParts.push(`# claudeMd
+Codebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.
+
+Contents of ${claudeMdPath} (project instructions, checked into the codebase):
+
+${claudeMdContent}`);
+        } catch {
+            // No CLAUDE.md found, that's ok
+        }
+
+        // If no context was found, just return the user message
+        if (contextParts.length === 0) {
+            return userMessage;
+        }
+
+        // Combine context with user message
+        const contextBlock = `<system-reminder>
+As you answer the user's questions, you can use the following context:
+${contextParts.join('\n\n')}
+
+      IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.
+</system-reminder>`;
+
+        console.log(`[SDK] Added project context from CLAUDE.md for session ${session.sessionId}`);
+        return `${contextBlock}\n${userMessage}`;
+    }
+
     async sendMessage(
         sessionId: string,
         userId: string,
@@ -738,9 +928,11 @@ export class ClaudeSdkManager extends ClaudeManager {
             prompt = content as unknown as string; // SDK accepts this format
         }
 
-        // If no query exists, create one
+        // If no query exists, create one with project context for the first message
         if (!session.query) {
-            await this.createQuery(session, typeof prompt === 'string' ? prompt : message);
+            // Preload project context on first message
+            const contextualPrompt = await this.buildInitialPromptWithContext(session, typeof prompt === 'string' ? prompt : message);
+            await this.createQuery(session, contextualPrompt);
         } else {
             // For streaming mode, we'd need to yield to the input generator
             // For now, create a new query for each message

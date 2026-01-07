@@ -29,6 +29,7 @@ HOST="${HOST:-localhost}"
 UI_PORT="${UI_PORT:-5173}"
 PORT="${PORT:-3006}"
 RESTART_MODE=false
+SDK_MODE=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -60,13 +61,23 @@ while [[ $# -gt 0 ]]; do
       RESTART_MODE=true
       shift
       ;;
+    --sdk)
+      SDK_MODE=true
+      shift
+      ;;
     *)
       echo "Unknown option: $1" >&2
-      echo "Usage: $0 [--host <host>] [--ui-port <port>] [--port <port>] [--restart]" >&2
+      echo "Usage: $0 [--host <host>] [--ui-port <port>] [--port <port>] [--restart] [--sdk]" >&2
       exit 1
       ;;
   esac
 done
+
+# Set SDK mode if requested
+if [[ "$SDK_MODE" == "true" ]]; then
+  export CLAUDE_MANAGER_TYPE=sdk
+  echo "SDK mode enabled (using Claude Agent SDK instead of CLI)"
+fi
 
 LOG_DIR="${ROOT_DIR}/.logs"
 PID_DIR="${ROOT_DIR}/.pids"
@@ -204,8 +215,13 @@ BACKEND_PORT="$PORT" VITE_PORT="$UI_PORT" VITE_HOST="$HOST" "$PNPM_BIN" -C packa
 FRONTEND_PID=$!
 echo "$FRONTEND_PID" > "${PID_DIR}/frontend.pid"
 
+SDK_INFO=""
+if [[ "$SDK_MODE" == "true" ]]; then
+  SDK_INFO=" [SDK MODE]"
+fi
+
 cat <<EOF
-WebUI started.
+WebUI started.${SDK_INFO}
 - Backend:  http://localhost:${PORT} (PID $BACKEND_PID)
 - Frontend: http://${HOST}:${UI_PORT} (PID $FRONTEND_PID)
 

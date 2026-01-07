@@ -114,6 +114,7 @@ export function SessionPage() {
   const setMobileView = useSessionStore((state) => state.setMobileView);
   const setMobileMenuOpen = useSessionStore((state) => state.setMobileMenuOpen);
   const setSessions = useSessionStore((state) => state.setSessions);
+  const setTodos = useSessionStore((state) => state.setTodos);
 
   const [selectedCliTool, setSelectedCliTool] = useState<string | null>(null);
   const [isExecutingTool, setIsExecutingTool] = useState(false);
@@ -656,6 +657,7 @@ export function SessionPage() {
             setMessages(id, []);
             clearToolExecutions(id);
             clearGeneratedImages(id);
+            setTodos(id, []);
           } else if (result.action === 'clear_with_restart') {
             // Delete messages and tool executions from database
             await api.delete(`/api/sessions/${id}/messages`);
@@ -663,6 +665,7 @@ export function SessionPage() {
             setMessages(id, []);
             clearToolExecutions(id);
             clearGeneratedImages(id);
+            setTodos(id, []);
             // Restart the Claude session
             await api.post(`/api/sessions/${id}/restart`);
           } else if (result.action === 'send_message' && result.response) {

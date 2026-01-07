@@ -1,10 +1,24 @@
 import { useState, useEffect, useRef } from 'react';
-import { Trash2, Play, Pause, ChevronDown, ChevronRight, Clock, Hash, TrendingUp, Bug, Send, Copy, AlertCircle } from 'lucide-react';
+import { Trash2, Play, Pause, ChevronDown, ChevronRight, Clock, Hash, TrendingUp, Bug, Send, Copy, AlertCircle, Shield, CheckCircle, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useDebugStore, getTopTimings, type TimingStats } from '@/hooks';
 import { api } from '@/services/api';
 import { socketService } from '@/services/socket';
+
+// Permission decision type for the Permissions tab
+interface PermissionDecision {
+  id: string;
+  sessionId: string;
+  timestamp: number;
+  toolName: string;
+  toolInput: unknown;
+  decision: 'allow' | 'deny';
+  reason: 'pattern' | 'mode' | 'user';
+  matchedPattern?: string;
+  mode?: string;
+  duration?: number;
+}
 
 function formatDuration(ms: number): string {
   if (ms < 1) return `${(ms * 1000).toFixed(0)}μs`;
@@ -87,7 +101,11 @@ export function DebugPanel({ sessionId }: DebugPanelProps) {
   const toggleEnabled = useDebugStore((s) => s.toggleEnabled);
   const clearStats = useDebugStore((s) => s.clearStats);
 
-  const [view, setView] = useState<'stats' | 'recent' | 'json'>('stats');
+  const [view, setView] = useState<'stats' | 'recent' | 'json' | 'permissions'>('stats');
+
+  // Permissions state
+  const [permissions, setPermissions] = useState<PermissionDecision[]>([]);
+  const [expandedPermissions, setExpandedPermissions] = useState<Set<string>>(new Set());
 
   // JSON debug state
   const [jsonMessages, setJsonMessages] = useState<Array<{
@@ -154,6 +172,33 @@ export function DebugPanel({ sessionId }: DebugPanelProps) {
     };
   }, [sessionId]);
 
+  // Listen for permission decision events
+  useEffect(() => {
+    if (!sessionId) return;
+
+    const handlePermissionDecision = (data: { sessionId: string; decision: PermissionDecision }) => {
+      if (data.sessionId === sessionId) {
+        setPermissions(prev => [...prev, data.decision]);
+      }
+    };
+
+    const handlePermissionCleared = (data: { sessionId: string }) => {
+      if (data.sessionId === sessionId) {
+        setPermissions([]);
+      }
+    };
+
+    const socket = socketService.getSocket();
+    if (!socket) return;
+    socket.on('permission:decision', handlePermissionDecision);
+    socket.on('permission:cleared', handlePermissionCleared);
+
+    return () => {
+      socket.off('permission:decision', handlePermissionDecision);
+      socket.off('permission:cleared', handlePermissionCleared);
+    };
+  }, [sessionId]);
+
   // Auto-scroll to bottom
   useEffect(() => {
     if (autoScroll && messagesEndRef.current) {
@@ -204,6 +249,42 @@ export function DebugPanel({ sessionId }: DebugPanelProps) {
 
   const clearJsonMessages = () => {
     setJsonMessages([]);
+  };
+
+  const clearPermissions = () => {
+    setPermissions([]);
+  };
+
+  const togglePermissionExpanded = (id: string) => {
+    setExpandedPermissions(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const getPermissionStats = () => {
+    const allowed = permissions.filter(p => p.decision === 'allow').length;
+    const denied = permissions.filter(p => p.decision === 'deny').length;
+    const byPattern = permissions.filter(p => p.reason === 'pattern').length;
+    const byMode = permissions.filter(p => p.reason === 'mode').length;
+    const byUser = permissions.filter(p => p.reason === 'user').length;
+    const durations = permissions.filter(p => p.duration !== undefined).map(p => p.duration as number);
+    const avgDuration = durations.length > 0 ? durations.reduce((a, b) => a + b, 0) / durations.length : 0;
+    return { allowed, denied, byPattern, byMode, byUser, avgDuration };
+  };
+
+  const getReasonBadgeColor = (reason: string): string => {
+    switch (reason) {
+      case 'pattern': return 'bg-blue-500/20 text-blue-400';
+      case 'mode': return 'bg-purple-500/20 text-purple-400';
+      case 'user': return 'bg-amber-500/20 text-amber-400';
+      default: return 'bg-gray-500/20 text-gray-400';
+    }
   };
 
   const getMessagePreview = (data: any): string => {
@@ -315,11 +396,24 @@ export function DebugPanel({ sessionId }: DebugPanelProps) {
             JSON
           </button>
         )}
+        {sessionId && (
+          <button
+            onClick={() => setView('permissions')}
+            className={cn(
+              'flex-1 px-3 py-1.5 text-xs font-medium transition-colors',
+              view === 'permissions'
+                ? 'border-b-2 border-primary text-primary'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            Perms
+          </button>
+        )}
       </div>
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
-        {!enabled && view !== 'json' ? (
+        {!enabled && view !== 'json' && view !== 'permissions' ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-4">
             <Bug className="h-8 w-8 mb-2 opacity-50" />
             <p className="text-sm text-center">
@@ -499,6 +593,125 @@ export function DebugPanel({ sessionId }: DebugPanelProps) {
                 <Send className="h-3 w-3 mr-2" />
                 Send Raw JSON
               </Button>
+            </div>
+          </div>
+        ) : view === 'permissions' ? (
+          <div className="flex-1 flex flex-col h-full">
+            {/* Permissions Summary */}
+            {permissions.length > 0 && (
+              <div className="flex items-center gap-4 px-3 py-2 bg-muted/30 border-b text-[10px]">
+                {(() => {
+                  const stats = getPermissionStats();
+                  return (
+                    <>
+                      <div className="flex items-center gap-1">
+                        <CheckCircle className="h-3 w-3 text-green-500" />
+                        <span className="font-mono">{stats.allowed}</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <XCircle className="h-3 w-3 text-red-500" />
+                        <span className="font-mono">{stats.denied}</span>
+                      </div>
+                      <div className="text-muted-foreground">
+                        avg: <span className="font-mono">{formatDuration(stats.avgDuration)}</span>
+                      </div>
+                    </>
+                  );
+                })()}
+                <div className="flex-1" />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={clearPermissions}
+                  className="h-6 px-2"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </Button>
+              </div>
+            )}
+
+            {/* Permissions List */}
+            <div className="flex-1 overflow-y-auto p-2">
+              <div className="space-y-2">
+                {permissions.length === 0 ? (
+                  <div className="text-center text-muted-foreground text-sm py-8">
+                    <Shield className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                    <p>No permission decisions yet.</p>
+                    <p className="text-xs mt-1">Tool permissions will appear here.</p>
+                  </div>
+                ) : (
+                  [...permissions].reverse().map(perm => {
+                    const isExpanded = expandedPermissions.has(perm.id);
+                    return (
+                      <div
+                        key={perm.id}
+                        className={cn(
+                          'border rounded-md overflow-hidden',
+                          perm.decision === 'allow' ? 'border-green-500/30' : 'border-red-500/30'
+                        )}
+                      >
+                        <button
+                          onClick={() => togglePermissionExpanded(perm.id)}
+                          className="w-full flex items-center gap-2 p-2 text-left hover:bg-muted/50 transition-colors"
+                        >
+                          {isExpanded ? (
+                            <ChevronDown className="h-3 w-3 shrink-0" />
+                          ) : (
+                            <ChevronRight className="h-3 w-3 shrink-0" />
+                          )}
+                          {perm.decision === 'allow' ? (
+                            <CheckCircle className="h-3 w-3 text-green-500 shrink-0" />
+                          ) : (
+                            <XCircle className="h-3 w-3 text-red-500 shrink-0" />
+                          )}
+                          <span className="text-xs font-mono flex-1 truncate">
+                            {perm.toolName}
+                          </span>
+                          <span className={cn(
+                            'text-[10px] px-1.5 py-0.5 rounded',
+                            getReasonBadgeColor(perm.reason)
+                          )}>
+                            {perm.reason}
+                          </span>
+                          <span className="text-[10px] text-muted-foreground">
+                            {formatDuration(perm.duration ?? 0)}
+                          </span>
+                        </button>
+
+                        {isExpanded && (
+                          <div className="border-t p-2 space-y-2 text-xs">
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                              <div className="text-muted-foreground">Time:</div>
+                              <div>{new Date(perm.timestamp).toLocaleTimeString()}</div>
+
+                              <div className="text-muted-foreground">Mode:</div>
+                              <div className="font-mono">{perm.mode || '-'}</div>
+
+                              {perm.matchedPattern && (
+                                <>
+                                  <div className="text-muted-foreground">Pattern:</div>
+                                  <div className="font-mono text-blue-400 truncate" title={perm.matchedPattern}>
+                                    {perm.matchedPattern}
+                                  </div>
+                                </>
+                              )}
+                            </div>
+
+                            {perm.toolInput !== undefined && perm.toolInput !== null && (
+                              <div>
+                                <div className="text-muted-foreground mb-1">Input:</div>
+                                <pre className="p-2 bg-muted/50 rounded text-[10px] font-mono overflow-x-auto max-h-32">
+                                  {JSON.stringify(perm.toolInput, null, 2)}
+                                </pre>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             </div>
           </div>
         ) : null}

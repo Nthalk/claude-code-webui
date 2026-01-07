@@ -8,15 +8,15 @@ import type {
   SocketData,
 } from '@claude-code-webui/shared';
 import { config } from '../config';
-import { ClaudeProcessManager } from '../services/claude/ClaudeProcessManager';
+import { createClaudeManager, type IClaudeManager } from '../services/claude';
 import { GeminiService } from '../services/gemini';
 import { getTodosBySessionId } from '../db/todos';
 import { pendingActionsQueue } from '../services/pendingActionsQueue';
 
 // Global reference to the process manager for use by routes
-let _processManager: ClaudeProcessManager | null = null;
+let _processManager: IClaudeManager | null = null;
 
-export function getProcessManager(): ClaudeProcessManager {
+export function getProcessManager(): IClaudeManager {
   if (!_processManager) {
     throw new Error('Process manager not initialized. Call setupWebSocket first.');
   }
@@ -42,7 +42,7 @@ export function setupWebSocket(httpServer: HttpServer): Server {
     }
   );
 
-  const processManager = new ClaudeProcessManager(io);
+  const processManager = createClaudeManager(io);
   _processManager = processManager; // Store global reference for routes
   const geminiService = new GeminiService(io);
 
