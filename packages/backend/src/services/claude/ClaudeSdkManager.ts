@@ -96,6 +96,21 @@ export class ClaudeSdkManager extends ClaudeManager {
     }
 
     /**
+     * Reload permission patterns for a session
+     */
+    public async reloadPermissionPatternsForSession(sessionId: string): Promise<void> {
+        const session = this.sessions.get(sessionId);
+        if (!session) {
+            return;
+        }
+
+        const patterns = await this.loadPermissionPatterns(session.workingDirectory);
+        session.allowPatterns = patterns.allow;
+        session.denyPatterns = patterns.deny;
+        console.log(`[SDK] Reloaded permission patterns for session ${sessionId}: ${patterns.allow.length} allow, ${patterns.deny.length} deny`);
+    }
+
+    /**
      * Load permission patterns from settings files
      */
     private async loadPermissionPatterns(workingDirectory: string): Promise<{allow: string[]; deny: string[]}> {

@@ -75,6 +75,7 @@ export interface PermissionPromptResponse extends BasePromptResponse {
   type: 'permission';
   approved: boolean;
   pattern?: string;
+  action?: 'allow_once' | 'allow_project' | 'allow_global' | 'deny';
 }
 
 // Plan approval response

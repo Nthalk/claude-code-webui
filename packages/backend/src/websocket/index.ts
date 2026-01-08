@@ -13,6 +13,7 @@ import { GeminiService } from '../services/gemini';
 import { getTodosBySessionId } from '../db/todos';
 import { pendingActionsQueue } from '../services/pendingActionsQueue';
 import { userPromptManager } from '../services/UserPromptManager';
+import { getDatabase } from '../db';
 
 // Global reference to the process manager for use by routes
 let _processManager: IClaudeManager | null = null;
@@ -361,8 +362,44 @@ export function setupWebSocket(httpServer: HttpServer): Server {
     });
 
     // Handle unified prompt responses
-    socket.on('prompt:respond', ({ sessionId, promptId, response }) => {
+    socket.on('prompt:respond', async ({ sessionId, promptId, response }) => {
       console.log(`[SOCKET EVENT] prompt:respond: ${sessionId} ${promptId} ${response.type}`);
+
+      // Handle permission responses that save patterns
+      if (response.type === 'permission' && response.approved && response.action && response.pattern) {
+        if (response.action === 'allow_project' || response.action === 'allow_global') {
+          try {
+            // Import the function we need
+            const { addPatternToSettings } = await import('../routes/claude-settings');
+
+            const scope = response.action === 'allow_global' ? 'global' : 'project';
+            let projectPath: string | undefined;
+
+            if (scope === 'project') {
+              // Get project path from session
+              const db = getDatabase();
+              const session = db
+                .prepare('SELECT working_directory FROM sessions WHERE id = ?')
+                .get(sessionId) as { working_directory: string } | undefined;
+              projectPath = session?.working_directory;
+            }
+
+            // Save the pattern
+            await addPatternToSettings(response.pattern, scope, projectPath);
+            console.log(`[SOCKET] Saved pattern "${response.pattern}" to ${scope} settings`);
+
+            // Notify the Claude manager to reload permissions for this session
+            const manager = getProcessManager();
+            if (manager && 'reloadPermissionPatternsForSession' in manager) {
+              // This is the SDK manager, reload patterns
+              await (manager as any).reloadPermissionPatternsForSession(sessionId);
+            }
+          } catch (err) {
+            console.error(`[SOCKET] Failed to save pattern:`, err);
+          }
+        }
+      }
+
       userPromptManager.respond(sessionId, promptId, response);
     });
 

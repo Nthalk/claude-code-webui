@@ -1545,6 +1545,7 @@ export function SessionPage() {
             type: 'permission',
             approved: action !== 'deny',
             pattern,
+            action,
           })}
         />
       )}
