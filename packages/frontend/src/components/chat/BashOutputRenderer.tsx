@@ -205,7 +205,7 @@ export const BashOutputRenderer: React.FC<BashOutputRendererProps> = ({
 
     if (outputType === 'json') {
       try {
-        const formatted = JSON.stringify(JSON.parse(output.trim()), null, 2);
+        const formatted = JSON.stringify(JSON.parse(displayOutput.trim()), null, 2);
         return (
           <div className="relative">
             <div className="absolute top-2 right-2">
@@ -225,7 +225,7 @@ export const BashOutputRenderer: React.FC<BashOutputRendererProps> = ({
           <div className="absolute top-2 right-2">
             <Table2 className="h-4 w-4 text-purple-500" />
           </div>
-          <pre className="whitespace-pre">{output}</pre>
+          <pre className="whitespace-pre">{displayOutput}</pre>
         </div>
       );
     }
