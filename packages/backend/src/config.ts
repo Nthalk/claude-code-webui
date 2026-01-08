@@ -19,8 +19,6 @@ const envSchema = z.object({
   CLAUDE_OAUTH_ENABLED: z.string().optional().transform(v => v !== 'false'),
   // User email for display (since Anthropic API is Cloudflare-protected)
   CLAUDE_USER_EMAIL: z.string().optional(),
-  // Claude manager type: 'process' (CLI-based) or 'sdk' (Agent SDK-based)
-  CLAUDE_MANAGER_TYPE: z.enum(['process', 'sdk']).default('process'),
 });
 
 function loadConfig() {
@@ -61,8 +59,6 @@ function loadConfig() {
       scopes: 'org:create_api_key user:profile user:inference',
       userEmail: env.CLAUDE_USER_EMAIL, // Optional: set via CLAUDE_USER_EMAIL env var
     },
-    // Claude manager type: 'process' or 'sdk'
-    claudeManagerType: env.CLAUDE_MANAGER_TYPE,
   };
 }
 
