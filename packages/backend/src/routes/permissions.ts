@@ -6,6 +6,7 @@ import { AppError } from '../middleware/errorHandler';
 import { addPatternToSettings } from './claude-settings';
 import { getDatabase } from '../db';
 import { pendingActionsQueue } from '../services/pendingActionsQueue';
+import { permissionHistory } from '../services/permission-history';
 
 const router = Router();
 
@@ -55,7 +56,7 @@ const permissionRequestSchema = z.object({
 });
 
 const permissionRespondSchema = z.object({
-  requestId: z.string().uuid(),
+  requestId: z.string().min(1),  // Accept any string ID (UUID for process manager, nanoid for SDK)
   action: z.enum(['allow_once', 'allow_project', 'allow_global', 'deny']),
   pattern: z.string().optional(),
   reason: z.string().optional(),
@@ -83,6 +84,73 @@ router.post('/request', async (req: Request, res: Response) => {
   const isMcpTool = toolName.startsWith('mcp__');
   const isWebSearch = toolName === 'WebSearch';
   const defaultPattern = isMcpTool || isWebSearch ? toolName : `${toolName}(:*)`;
+
+  // Special handling for ExitPlanMode - convert to plan approval
+  if (toolName === 'ExitPlanMode') {
+    console.log(`[PERMISSIONS] Intercepting ExitPlanMode permission request, converting to plan approval`);
+
+    // Extract plan content from toolInput if available
+    const planContent = typeof toolInput === 'object' && toolInput !== null && 'plan' in toolInput
+      ? (toolInput as { plan?: string }).plan
+      : undefined;
+
+    // Add to plan approval queue instead of permission queue
+    pendingActionsQueue.addAction(sessionId, 'plan', requestId, {
+      sessionId,
+      requestId,
+      planContent,
+      planPath: undefined, // We don't have the path from the permission request
+    });
+
+    // Store as pending permission so the response endpoint still works
+    const pendingRequest: PendingPermission = {
+      sessionId,
+      requestId,
+      toolName,
+      toolInput,
+      description: 'Plan approval request',
+      suggestedPattern: 'ExitPlanMode',
+      status: 'pending',
+      createdAt: Date.now(),
+    };
+    pendingRequests.set(requestId, pendingRequest);
+
+    console.log(`[PERMISSIONS] ExitPlanMode request ${requestId} queued as plan approval`);
+    return res.json({ success: true, requestId });
+  }
+
+  // Special handling for AskUserQuestion - convert to user question
+  if (toolName === 'AskUserQuestion') {
+    console.log(`[PERMISSIONS] Intercepting AskUserQuestion permission request, converting to user question`);
+
+    // Extract questions from toolInput
+    const questions = typeof toolInput === 'object' && toolInput !== null && 'questions' in toolInput
+      ? (toolInput as { questions?: any }).questions
+      : [];
+
+    // Add to question queue instead of permission queue
+    pendingActionsQueue.addAction(sessionId, 'question', requestId, {
+      sessionId,
+      requestId,
+      questions: Array.isArray(questions) ? questions : [],
+    });
+
+    // Store as pending permission so the response endpoint still works
+    const pendingRequest: PendingPermission = {
+      sessionId,
+      requestId,
+      toolName,
+      toolInput,
+      description: 'User question request',
+      suggestedPattern: 'AskUserQuestion',
+      status: 'pending',
+      createdAt: Date.now(),
+    };
+    pendingRequests.set(requestId, pendingRequest);
+
+    console.log(`[PERMISSIONS] AskUserQuestion request ${requestId} queued as user question`);
+    return res.json({ success: true, requestId });
+  }
 
   // Store the pending request
   const pendingRequest: PendingPermission = {
@@ -196,7 +264,10 @@ router.post('/respond', requireAuth, async (req: Request, res: Response) => {
   const request = pendingRequests.get(requestId);
 
   if (!request) {
-    throw new AppError('Permission request not found or expired', 404, 'NOT_FOUND');
+    // Request not found - might be an SDK session (handled via WebSocket) or expired
+    // Return success to avoid crashing - the WebSocket handler handles SDK sessions
+    console.log(`[PERMISSIONS] Request ${requestId} not found in pending requests (likely SDK session)`);
+    return res.json({ success: true, message: 'Request handled via WebSocket or not found' });
   }
 
   // Update request status
@@ -292,6 +363,30 @@ export function getPendingPermissionsForSession(sessionId: string): PendingPermi
   return pending;
 }
 
+// Export helper to get a specific permission request by ID
+export function getPendingPermissionById(requestId: string): PendingPermission | undefined {
+  return pendingRequests.get(requestId);
+}
+
+// Export helper to update permission status (for plan approval handling)
+export function updatePermissionStatus(requestId: string, approved: boolean, reason?: string): boolean {
+  const request = pendingRequests.get(requestId);
+  if (!request) {
+    return false;
+  }
+
+  if (approved) {
+    request.status = 'approved';
+  } else {
+    request.status = 'denied';
+    if (reason) {
+      request.denialReason = reason;
+    }
+  }
+
+  return true;
+}
+
 // Clear all pending permissions for a session (used when process is terminated)
 export function clearPendingPermissionsForSession(sessionId: string): void {
   const cleared: string[] = [];
@@ -319,5 +414,68 @@ export function denyPendingPermissionsForSession(sessionId: string): void {
     console.log(`[PERMISSIONS] Denied ${denied.length} pending permissions for session ${sessionId}`);
   }
 }
+
+// ============================================================
+// Permission History Endpoints (for SDK-based sessions)
+// ============================================================
+
+/**
+ * GET /api/permissions/history/:sessionId
+ * Get permission decision history for a session.
+ * Useful for debugging and auditing permission decisions.
+ * Requires authentication.
+ */
+router.get('/history/:sessionId', requireAuth, (req: Request, res: Response) => {
+  const sessionId = req.params.sessionId;
+  if (!sessionId) {
+    return res.status(400).json({ success: false, error: 'Missing sessionId' });
+  }
+
+  const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
+  const history = permissionHistory.getHistory(sessionId, limit);
+
+  res.json({
+    success: true,
+    data: history,
+  });
+});
+
+/**
+ * GET /api/permissions/stats/:sessionId
+ * Get permission statistics for a session.
+ * Requires authentication.
+ */
+router.get('/stats/:sessionId', requireAuth, (req: Request, res: Response) => {
+  const sessionId = req.params.sessionId;
+  if (!sessionId) {
+    return res.status(400).json({ success: false, error: 'Missing sessionId' });
+  }
+
+  const stats = permissionHistory.getStats(sessionId);
+
+  res.json({
+    success: true,
+    data: stats,
+  });
+});
+
+/**
+ * DELETE /api/permissions/history/:sessionId
+ * Clear permission history for a session.
+ * Requires authentication.
+ */
+router.delete('/history/:sessionId', requireAuth, (req: Request, res: Response) => {
+  const sessionId = req.params.sessionId;
+  if (!sessionId) {
+    return res.status(400).json({ success: false, error: 'Missing sessionId' });
+  }
+
+  permissionHistory.clearHistory(sessionId);
+
+  res.json({
+    success: true,
+    message: 'Permission history cleared',
+  });
+});
 
 export default router;

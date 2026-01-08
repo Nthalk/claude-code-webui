@@ -13,8 +13,10 @@ import type {
     BufferedMessage,
     ModelType,
     SessionMode,
+    TodoItem,
 } from '@claude-code-webui/shared';
-import {query, type Query, type SDKMessage, type PermissionResult} from '@anthropic-ai/claude-agent-sdk';
+import {query, createSdkMcpServer, tool, type Query, type SDKMessage, type PermissionResult, type PostToolUseHookInput, type HookJSONOutput} from '@anthropic-ai/claude-agent-sdk';
+import {z} from 'zod';
 import {ClaudeManager, CircularBuffer} from './ClaudeManager';
 import {getDatabase} from '../../db';
 import {nanoid} from 'nanoid';
@@ -22,16 +24,18 @@ import type {
     ImageData,
     SessionOptions,
     SocketIOServer,
-    PermissionRequest,
-    UserQuestion,
-    PlanApprovalRequest,
 } from './types';
 import {MODEL_IDS} from './types';
 import {PermissionMatcher} from '../../utils/permission-matcher';
 import {permissionHistory} from '../permission-history';
+import {userPromptManager} from '../UserPromptManager';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
+import {exec} from 'child_process';
+import {promisify} from 'util';
+
+const execAsync = promisify(exec);
 
 // Buffer size for reconnection
 const BUFFER_SIZE = 5000;
@@ -58,20 +62,6 @@ interface SdkSession {
     inputResolvers: Array<{
         resolve: (value: {type: 'user'; message: {role: 'user'; content: string | Array<{type: string; [key: string]: unknown}>}}) => void;
     }>;
-
-    // Pending permission/question promises (resolved by user action)
-    pendingPermission: {
-        request: PermissionRequest;
-        resolve: (result: PermissionResult) => void;
-    } | null;
-    pendingQuestion: {
-        request: UserQuestion;
-        resolve: (answers: Record<string, string>) => void;
-    } | null;
-    pendingPlanApproval: {
-        request: PlanApprovalRequest;
-        resolve: (approved: boolean) => void;
-    } | null;
 
     // Current streaming state
     currentText: string;
@@ -155,6 +145,75 @@ export class ClaudeSdkManager extends ClaudeManager {
         return session?.isCompacting ?? false;
     }
 
+    /**
+     * Handle commit tool execution
+     */
+    private async handleCommitTool(
+        sessionId: string,
+        workingDirectory: string,
+        commitMessage: string
+    ): Promise<string> {
+        console.log(`[SDK] Handling commit request with message: ${commitMessage}`);
+
+        // Get current git status
+        let gitStatus: string;
+        try {
+            const {stdout} = await execAsync('git status --porcelain=v1', {cwd: workingDirectory});
+            gitStatus = stdout;
+
+            if (!gitStatus.trim()) {
+                return 'No changes to commit. Working directory is clean.';
+            }
+        } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            console.log(`[SDK] Error getting git status: ${errMsg}`);
+            return `Failed to get git status: ${errMsg}`;
+        }
+
+        // Use unified prompt system for commit approval
+        const response = await userPromptManager.prompt(sessionId, {
+            type: 'commit_approval',
+            sessionId,
+            commitMessage,
+            gitStatus,
+        });
+
+        if (response.type !== 'commit_approval' || !response.approved) {
+            const reason = response.type === 'commit_approval' ? response.reason : 'User denied commit';
+            console.log(`[SDK] User denied commit: ${reason}`);
+            return reason || 'User denied commit';
+        }
+
+        console.log('[SDK] User approved commit');
+
+        // Execute the commit
+        try {
+            await execAsync('git add -A', {cwd: workingDirectory});
+            await execAsync(`git commit -m "${commitMessage.replace(/"/g, '\\"')}"`, {cwd: workingDirectory});
+            console.log('[SDK] Commit successful');
+
+            // Push if requested
+            if (response.push) {
+                console.log('[SDK] User requested push, pushing to remote...');
+                try {
+                    await execAsync('git push', {cwd: workingDirectory});
+                    console.log('[SDK] Push successful');
+                    return 'Commit created and pushed successfully';
+                } catch (err) {
+                    const errMsg = err instanceof Error ? err.message : String(err);
+                    console.log(`[SDK] Push failed: ${errMsg}`);
+                    return `Commit created successfully but push failed: ${errMsg}`;
+                }
+            }
+
+            return 'Commit created successfully';
+        } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            console.log(`[SDK] Commit failed: ${errMsg}`);
+            return `Failed to create commit: ${errMsg}`;
+        }
+    }
+
     async startSession(sessionId: string, userId: string, options?: SessionOptions): Promise<void> {
         console.log(`[SDK] Starting session ${sessionId}`);
 
@@ -208,9 +267,6 @@ export class ClaudeSdkManager extends ClaudeManager {
             allowPatterns: patterns.allow,
             denyPatterns: patterns.deny,
             inputResolvers: [],
-            pendingPermission: null,
-            pendingQuestion: null,
-            pendingPlanApproval: null,
             currentText: '',
             currentToolName: null,
             currentToolId: null,
@@ -257,6 +313,28 @@ export class ClaudeSdkManager extends ClaudeManager {
 
         console.log(`[SDK] Creating query for session ${sessionId} with permissionMode=${permissionMode}, sessionMode=${mode}`);
 
+        // Create in-process MCP server for commit tool using the tool() helper
+        const commitTool = tool(
+            'commit',
+            `Create a git commit with user approval. Shows git status and allows the user to approve, deny, or choose to push.
+
+Usage:
+- Provide a commit message as input
+- User will see git status, can approve/deny, and optionally push
+- Returns result of commit operation`,
+            {message: z.string().describe('The commit message')},
+            async (args) => {
+                const result = await this.handleCommitTool(sessionId, workingDirectory, args.message);
+                return {content: [{type: 'text' as const, text: result}]};
+            }
+        );
+
+        const sdkUiMcpServer = createSdkMcpServer({
+            name: 'sdk_ui',
+            version: '1.0.0',
+            tools: [commitTool],
+        });
+
         // Create the query with canUseTool for permission handling
         const q = query({
             prompt: initialPrompt,
@@ -267,9 +345,23 @@ export class ClaudeSdkManager extends ClaudeManager {
                 includePartialMessages: true,
                 resume: session.claudeSessionId ?? undefined,
                 abortController: session.abortController,
+                // Register SDK UI MCP server for commit tool (in-process)
+                mcpServers: {sdk_ui: sdkUiMcpServer},
                 // Don't use allowDangerouslySkipPermissions - we handle danger mode in canUseTool
                 canUseTool: async (toolName, input, {signal}) => {
                     return this.handleToolPermission(sessionId, toolName, input, signal);
+                },
+                // Add PostToolUse hook to handle tool execution results
+                hooks: {
+                    PostToolUse: [{
+                        hooks: [async (hookInput, _toolUseId, _options) => {
+                            // Only handle PostToolUse hooks
+                            if (hookInput.hook_event_name === 'PostToolUse') {
+                                return this.handlePostToolUse(sessionId, hookInput);
+                            }
+                            return { continue: true };
+                        }],
+                    }],
                 },
             },
         });
@@ -300,6 +392,45 @@ export class ClaudeSdkManager extends ClaudeManager {
 
         console.log(`[SDK] canUseTool called: tool=${toolName}, mode=${session.mode}`);
 
+        // Intercept git commit commands and redirect to MCP tool
+        if (toolName === 'Bash') {
+            const bashInput = input as {command?: string};
+            const command = bashInput.command || '';
+            if (command.match(/^git\s+commit\b/)) {
+                console.log(`[SDK] Intercepting git commit command, redirecting to MCP tool`);
+                return {
+                    behavior: 'deny',
+                    message: 'Please use the mcp__sdk_ui__commit tool instead of git commit. Example: Use the commit tool with your message.',
+                };
+            }
+        }
+
+        // Handle ExitPlanMode - ALWAYS require approval regardless of patterns
+        if (toolName === 'ExitPlanMode') {
+            console.log(`[SDK] ExitPlanMode detected, converting to plan approval request`);
+
+            // Extract plan content from input if available
+            const planContent = typeof input === 'object' && input !== null && 'plan' in input
+                ? (input as { plan?: string }).plan
+                : undefined;
+
+            // Use unified prompt system
+            const response = await userPromptManager.prompt(sessionId, {
+                type: 'plan_approval',
+                sessionId,
+                planContent,
+                planPath: undefined,
+            });
+
+            if (response.type === 'plan_approval' && response.approved) {
+                console.log(`[SDK] ExitPlanMode approved by user`);
+                return {behavior: 'allow', updatedInput: input as Record<string, unknown>};
+            } else {
+                console.log(`[SDK] ExitPlanMode denied by user`);
+                return {behavior: 'deny', message: 'Plan not approved. Please revise based on feedback.'};
+            }
+        }
+
         // Handle AskUserQuestion - ALWAYS wait for user answers regardless of mode
         if (toolName === 'AskUserQuestion') {
             const questionInput = input as {
@@ -313,30 +444,28 @@ export class ClaudeSdkManager extends ClaudeManager {
 
             console.log(`[SDK] AskUserQuestion for ${sessionId}:`, questionInput.questions.map(q => q.question));
 
-            // Create promise for user response
-            const answers = await new Promise<Record<string, string>>((resolve) => {
-                const questionId = nanoid();
-
-                session.pendingQuestion = {
-                    request: {
-                        questionId,
-                        sessionId,
-                        questions: questionInput.questions,
-                    },
-                    resolve,
-                };
-
-                // Emit to frontend (SDK-specific event)
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                (this.io.to(`session:${sessionId}`) as any).emit('action_request', {
-                    type: 'user_question',
-                    requestId: questionId,
-                    sessionId,
-                    questions: questionInput.questions,
-                });
+            // Use unified prompt system
+            const response = await userPromptManager.prompt(sessionId, {
+                type: 'user_question',
+                sessionId,
+                questions: questionInput.questions,
             });
 
+            // Extract answers from response
+            const answers = response.type === 'user_question' ? response.answers : {};
+
             console.log(`[SDK] AskUserQuestion answers received:`, answers);
+
+            // Store the result for display (format matches what the tool expects)
+            const resultText = `User has answered your questions: ${Object.entries(answers).map(([k, v]) => `"${k}"="${v}"`).join(', ')}. You can now continue with the user's answers in mind.`;
+
+            // Save tool execution with the result
+            if (session.currentToolId) {
+                this.updateToolExecution(session.currentToolId, {
+                    result: resultText,
+                    status: 'completed',
+                });
+            }
 
             // Return with answers filled in (per SDK docs)
             return {
@@ -386,29 +515,17 @@ export class ClaudeSdkManager extends ClaudeManager {
         if (session.mode === 'planning') {
             console.log(`[SDK] Permission request for ${toolName} in planning mode`);
 
-            const approved = await new Promise<boolean>((resolve) => {
-                const requestId = nanoid();
-
-                session.pendingPermission = {
-                    request: {
-                        requestId,
-                        sessionId,
-                        toolName,
-                        input,
-                    },
-                    resolve: (result) => resolve(result.behavior === 'allow'),
-                };
-
-                // Emit to frontend (SDK-specific event)
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                (this.io.to(`session:${sessionId}`) as any).emit('action_request', {
-                    type: 'permission',
-                    requestId,
-                    sessionId,
-                    toolName,
-                    input,
-                });
+            // Use unified prompt system
+            const response = await userPromptManager.prompt(sessionId, {
+                type: 'permission',
+                sessionId,
+                toolName,
+                toolInput: input,
+                description: `${toolName} tool`,
+                suggestedPattern: `${toolName}(:*)`,
             });
+
+            const approved = response.type === 'permission' && response.approved;
 
             permissionHistory.track({
                 id: nanoid(),
@@ -431,21 +548,220 @@ export class ClaudeSdkManager extends ClaudeManager {
             }
         }
 
-        // For auto-accept and danger modes, auto-approve all tools
-        permissionHistory.track({
-            id: nanoid(),
-            sessionId,
-            timestamp: Date.now(),
-            toolName,
-            toolInput: input,
-            decision: 'allow',
-            reason: 'mode',
-            mode: session.mode,
-            duration: Date.now() - startTime,
-        });
+        // For auto-accept mode, check against safe patterns
+        if (session.mode === 'auto-accept') {
+            // Define safe patterns for auto-accept mode
+            const autoAcceptPatterns = [
+                // Planning operations
+                'EnterPlanMode',
 
-        console.log(`[SDK] Auto-approving ${toolName} (mode=${session.mode})`);
-        return {behavior: 'allow', updatedInput: input as Record<string, unknown>};
+                // File operations within project
+                'Read(*)',
+                'Write(*)',
+                'Edit(*)',
+                'Glob(*)',
+                'Grep(*)',
+
+                // Safe bash commands
+                'Bash(ls*)',
+                'Bash(pwd*)',
+                'Bash(echo*)',
+                'Bash(cat*)',
+                'Bash(grep*)',
+                'Bash(find*)',
+                'Bash(head*)',
+                'Bash(tail*)',
+                'Bash(wc*)',
+                'Bash(which*)',
+                'Bash(date*)',
+                'Bash(whoami*)',
+                'Bash(uname*)',
+                'Bash(pnpm typecheck*)',
+                'Bash(pnpm test*)',
+                'Bash(pnpm lint*)',
+                'Bash(npm run*)',
+                'Bash(yarn*)',
+
+                // Git read operations (safe)
+                'Bash(git status*)',
+                'Bash(git diff*)',
+                'Bash(git log*)',
+                'Bash(git branch*)',
+                'Bash(git remote -v*)',
+                'Bash(git show*)',
+
+                // Development tools
+                'TodoWrite(*)',
+                'AskUserQuestion(*)',
+                'Task(*)',
+                'LSP(*)',
+                'NotebookEdit(*)',
+
+                // Web operations
+                'WebFetch(*)',
+                'WebSearch(*)',
+            ];
+
+            // Check if tool matches any auto-accept pattern
+            const matchResult = PermissionMatcher.checkPatterns(
+                toolName,
+                input,
+                autoAcceptPatterns,
+                [] // no deny patterns for auto-accept check
+            );
+
+            if (matchResult.matched && matchResult.type === 'allow') {
+                permissionHistory.track({
+                    id: nanoid(),
+                    sessionId,
+                    timestamp: Date.now(),
+                    toolName,
+                    toolInput: input,
+                    decision: 'allow',
+                    reason: 'mode',
+                    matchedPattern: matchResult.pattern,
+                    mode: session.mode,
+                    duration: Date.now() - startTime,
+                });
+
+                console.log(`[SDK] Auto-approved ${toolName} in auto-accept mode by pattern: ${matchResult.pattern}`);
+                return {behavior: 'allow', updatedInput: input as Record<string, unknown>};
+            } else {
+                // Not in safe list - ask user
+                console.log(`[SDK] Tool ${toolName} not in auto-accept safe list, requesting permission`);
+
+                // Use unified prompt system
+                const response = await userPromptManager.prompt(sessionId, {
+                    type: 'permission',
+                    sessionId,
+                    toolName,
+                    toolInput: input,
+                    description: `${toolName} tool`,
+                    suggestedPattern: `${toolName}(:*)`,
+                });
+
+                const approved = response.type === 'permission' && response.approved;
+
+                permissionHistory.track({
+                    id: nanoid(),
+                    sessionId,
+                    timestamp: Date.now(),
+                    toolName,
+                    toolInput: input,
+                    decision: approved ? 'allow' : 'deny',
+                    reason: 'user',
+                    mode: session.mode,
+                    duration: Date.now() - startTime,
+                });
+
+                if (approved) {
+                    console.log(`[SDK] Tool ${toolName} approved by user in auto-accept mode`);
+                    return {behavior: 'allow', updatedInput: input as Record<string, unknown>};
+                } else {
+                    console.log(`[SDK] Tool ${toolName} denied by user in auto-accept mode`);
+                    return {behavior: 'deny', message: 'User denied permission'};
+                }
+            }
+        }
+
+        // For danger mode, auto-approve everything
+        if (session.mode === 'danger') {
+            permissionHistory.track({
+                id: nanoid(),
+                sessionId,
+                timestamp: Date.now(),
+                toolName,
+                toolInput: input,
+                decision: 'allow',
+                reason: 'mode',
+                mode: session.mode,
+                duration: Date.now() - startTime,
+            });
+
+            console.log(`[SDK] Auto-approving ${toolName} (danger mode - all tools allowed)`);
+            return {behavior: 'allow', updatedInput: input as Record<string, unknown>};
+        }
+
+        // Should not reach here - invalid mode
+        console.log(`[SDK] WARNING: Invalid session mode ${session.mode}, denying by default`);
+        return {behavior: 'deny', message: 'Invalid session mode'};
+    }
+
+    /**
+     * Handle PostToolUse hook - called after a tool has been executed
+     * This allows us to observe and potentially modify tool results
+     */
+    private async handlePostToolUse(sessionId: string, hookInput: PostToolUseHookInput): Promise<HookJSONOutput> {
+        const session = this.sessions.get(sessionId);
+        if (!session) {
+            console.log(`[SDK] PostToolUse: session ${sessionId} not found`);
+            return { continue: true };
+        }
+
+        const { tool_name, tool_input, tool_response, tool_use_id } = hookInput;
+
+        console.log(`[SDK] PostToolUse hook called: tool=${tool_name}, toolUseId=${tool_use_id}`);
+
+        // Update tool execution with the result
+        if (tool_use_id && tool_response !== undefined) {
+            // Convert tool response to string for storage
+            const resultStr = typeof tool_response === 'string'
+                ? tool_response
+                : JSON.stringify(tool_response, null, 2);
+
+            this.updateToolExecution(tool_use_id, {
+                result: resultStr,
+                status: 'completed',
+            });
+
+            // Emit tool completion event with result
+            this.io.to(`session:${sessionId}`).emit('session:tool_use', {
+                sessionId,
+                toolName: tool_name,
+                toolId: tool_use_id,
+                status: 'completed',
+                result: resultStr,
+            });
+
+            console.log(`[SDK] Tool ${tool_name} (${tool_use_id}) completed with result`);
+        }
+
+        // Special handling for specific tools that need result processing
+        switch (tool_name) {
+            case 'WebFetch':
+            case 'WebSearch':
+                // These tools might return large results that could be summarized
+                console.log(`[SDK] ${tool_name} returned ${typeof tool_response === 'string' ? tool_response.length : 'structured'} data`);
+                break;
+
+            case 'Task':
+                // Task tool spawns subagents - track their completion
+                if (tool_response && typeof tool_response === 'object' && 'agentId' in tool_response) {
+                    console.log(`[SDK] Task completed with agent ID: ${tool_response.agentId}`);
+                }
+                break;
+
+            case 'TodoWrite':
+                // TodoWrite updates the task list - emit an event for UI update
+                if (tool_response && tool_input && typeof tool_input === 'object' && 'todos' in tool_input) {
+                    this.io.to(`session:${sessionId}`).emit('session:todos', {
+                        sessionId,
+                        todos: tool_input.todos as TodoItem[],
+                    });
+                }
+                break;
+        }
+
+        // Return continue: true to proceed with normal execution
+        // We could potentially modify the tool output here by returning:
+        // {
+        //     continue: true,
+        //     hookSpecificOutput: {
+        //         hookEventName: 'PostToolUse',
+        //         updatedMCPToolOutput: modifiedResponse
+        //     }
+        // }
+        return { continue: true };
     }
 
     /**
@@ -772,15 +1088,8 @@ export class ClaudeSdkManager extends ClaudeManager {
         // Abort the query
         session.abortController.abort();
 
-        // Deny any pending permissions
-        if (session.pendingPermission) {
-            session.pendingPermission.resolve({behavior: 'deny', message: 'Session stopped'});
-            session.pendingPermission = null;
-        }
-        if (session.pendingQuestion) {
-            session.pendingQuestion.resolve({});
-            session.pendingQuestion = null;
-        }
+        // Clear any pending prompts
+        userPromptManager.clearSession(sessionId);
 
         // Clean up
         this.sessions.delete(sessionId);
@@ -1061,56 +1370,4 @@ ${contextParts.join('\n\n')}
         }
     }
 
-    // ============================================================
-    // Response handlers for pending actions
-    // ============================================================
-
-    /**
-     * Respond to a pending permission request
-     */
-    respondToPermission(sessionId: string, requestId: string, approved: boolean): void {
-        const session = this.sessions.get(sessionId);
-        if (!session?.pendingPermission) return;
-
-        if (session.pendingPermission.request.requestId === requestId) {
-            if (approved) {
-                session.pendingPermission.resolve({
-                    behavior: 'allow',
-                    updatedInput: session.pendingPermission.request.input as Record<string, unknown>,
-                });
-            } else {
-                session.pendingPermission.resolve({
-                    behavior: 'deny',
-                    message: 'User denied permission',
-                });
-            }
-            session.pendingPermission = null;
-        }
-    }
-
-    /**
-     * Respond to a pending user question
-     */
-    respondToQuestion(sessionId: string, questionId: string, answers: Record<string, string>): void {
-        const session = this.sessions.get(sessionId);
-        if (!session?.pendingQuestion) return;
-
-        if (session.pendingQuestion.request.questionId === questionId) {
-            session.pendingQuestion.resolve(answers);
-            session.pendingQuestion = null;
-        }
-    }
-
-    /**
-     * Respond to a pending plan approval
-     */
-    respondToPlanApproval(sessionId: string, requestId: string, approved: boolean): void {
-        const session = this.sessions.get(sessionId);
-        if (!session?.pendingPlanApproval) return;
-
-        if (session.pendingPlanApproval.request.requestId === requestId) {
-            session.pendingPlanApproval.resolve(approved);
-            session.pendingPlanApproval = null;
-        }
-    }
 }

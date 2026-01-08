@@ -1,5 +1,6 @@
 import type { Message, StreamingMessage, CompactMetadata } from './message';
 import type { SessionStatus } from './session';
+import type { Prompt, PromptResponse } from './prompt';
 
 // Session permission mode
 export type SessionMode = 'planning' | 'auto-accept' | 'manual' | 'danger';
@@ -82,6 +83,17 @@ export interface ClientToServerEvents {
     sessionId: string;
     requestId: string;
     answers: UserQuestionAnswers;
+  }) => void;
+  'session:plan_approval_respond': (data: {
+    sessionId: string;
+    requestId: string;
+    approved: boolean;
+  }) => void;
+  // Unified prompt response (new system)
+  'prompt:respond': (data: {
+    sessionId: string;
+    promptId: string;
+    response: PromptResponse;
   }) => void;
 }
 
@@ -237,6 +249,16 @@ export interface ServerToClientEvents {
   'debug:claude:sent': (data: { sessionId: string; message: any }) => void;
   'permission:decision': (data: { sessionId: string; decision: PermissionHistoryDecision }) => void;
   'permission:cleared': (data: { sessionId: string }) => void;
+  // Unified action request for SDK-based sessions (legacy)
+  'action_request': (data: {
+    type: 'permission' | 'user_question' | 'plan_approval' | 'commit_approval';
+    sessionId: string;
+    requestId: string;
+    [key: string]: unknown;
+  }) => void;
+  // Unified prompt system (new)
+  'prompt:request': (data: Prompt) => void;
+  'prompt:resolved': (data: { sessionId: string; promptId: string }) => void;
   error: (message: string) => void;
 }
 

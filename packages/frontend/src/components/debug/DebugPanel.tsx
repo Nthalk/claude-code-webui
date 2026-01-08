@@ -126,8 +126,6 @@ export function DebugPanel({ sessionId }: DebugPanelProps) {
   const totalCount = Object.values(stats).reduce((sum, s) => sum + s.count, 0);
   const totalTime = Object.values(stats).reduce((sum, s) => sum + s.total, 0);
 
-  console.log('DebugPanel rendering, enabled:', enabled, 'stats:', Object.keys(stats).length);
-
   // Listen for Claude JSON messages via WebSocket
   useEffect(() => {
     if (!sessionId) return;

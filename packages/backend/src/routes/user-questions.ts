@@ -86,7 +86,7 @@ const questionRequestSchema = z.object({
 });
 
 const questionRespondSchema = z.object({
-  requestId: z.string().uuid(),
+  requestId: z.string().min(1), // Accept any string ID (UUID for process manager, nanoid for SDK)
   answers: z.record(z.union([z.string(), z.array(z.string())])),
 });
 
@@ -207,7 +207,39 @@ router.post('/respond', requireAuth, async (req: Request, res: Response) => {
   const request = pendingQuestions.get(requestId);
 
   if (!request) {
-    throw new AppError('Question request not found or expired', 404, 'NOT_FOUND');
+    // Check if this is an AskUserQuestion that came through the permission system
+    const permissionsModule = await import('./permissions');
+    const permission = permissionsModule.getPendingPermissionById(requestId);
+
+    if (permission && permission.toolName === 'AskUserQuestion') {
+      console.log(`[USER-QUESTIONS] Found AskUserQuestion permission request ${requestId}, updating it`);
+
+      // Update the permission request status
+      const updated = permissionsModule.updatePermissionStatus(requestId, true); // Always approve for answered questions
+      if (!updated) {
+        throw new AppError('Failed to update permission status', 500, 'INTERNAL_ERROR');
+      }
+
+      // Notify the queue that this action is resolved
+      pendingActionsQueue.resolveAction(permission.sessionId, requestId);
+
+      // Broadcast to all clients
+      const io: Server = req.app.get('io');
+      io.to(`session:${permission.sessionId}`).emit('session:question_resolved', {
+        sessionId: permission.sessionId,
+        requestId,
+      });
+
+      return res.json({
+        success: true,
+        answers,
+      });
+    }
+
+    // Request not found - might be an SDK session (handled via WebSocket) or expired
+    // Return success to avoid crashing - the WebSocket handler handles SDK sessions
+    console.log(`[USER-QUESTIONS] Request ${requestId} not found in pending questions (likely SDK session)`);
+    return res.json({ success: true, message: 'Request handled via WebSocket or not found' });
   }
 
   // Update request with answers

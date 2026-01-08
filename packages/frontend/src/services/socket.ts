@@ -8,6 +8,8 @@ import type {
   PermissionAction,
   UserQuestionAnswers,
   ToolExecution,
+  Prompt,
+  PromptResponse,
 } from '@claude-code-webui/shared';
 import { useAuthStore } from '@/stores/authStore';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -238,6 +240,59 @@ class SocketService {
       useSessionStore.getState().setPendingCommitApproval(data.sessionId, data);
     });
 
+    // Unified action_request handler for SDK-based sessions
+    // Routes to appropriate store methods based on action type
+    this.socket.on('action_request', (data: { type: string; sessionId: string; requestId: string; [key: string]: unknown }) => {
+      console.log(`[SOCKET] action_request received: type=${data.type}, sessionId=${data.sessionId}`);
+      const store = useSessionStore.getState();
+
+      switch (data.type) {
+        case 'permission':
+          store.setPendingPermission(data.sessionId, {
+            requestId: data.requestId,
+            sessionId: data.sessionId,
+            toolName: data.toolName as string,
+            toolInput: data.input,
+            description: `${data.toolName} tool`,
+            suggestedPattern: `${data.toolName}(:*)`,
+          });
+          break;
+
+        case 'user_question':
+          store.setPendingUserQuestion(data.sessionId, {
+            requestId: data.requestId,
+            sessionId: data.sessionId,
+            questions: data.questions as Array<{
+              question: string;
+              header: string;
+              options: Array<{ label: string; description: string }>;
+              multiSelect: boolean;
+            }>,
+          });
+          break;
+
+        case 'plan_approval':
+          store.setPendingPlanApproval(data.sessionId, {
+            requestId: data.requestId,
+            sessionId: data.sessionId,
+            planPath: data.planPath as string | undefined,
+          });
+          break;
+
+        case 'commit_approval':
+          store.setPendingCommitApproval(data.sessionId, {
+            requestId: data.requestId,
+            sessionId: data.sessionId,
+            commitMessage: (data.suggestedMessage as string) || '',
+            gitStatus: (data.diff as string) || '',
+          });
+          break;
+
+        default:
+          console.warn(`[SOCKET] Unknown action_request type: ${data.type}`);
+      }
+    });
+
     // Handle permission/question resolved (dismiss dialog on other tabs)
     this.socket.on('session:permission_resolved', (data) => {
       console.log(`[SOCKET] session:permission_resolved received:`, data.requestId);
@@ -272,6 +327,21 @@ class SocketService {
       const pending = store.pendingCommitApprovals[data.sessionId];
       if (pending?.requestId === data.requestId) {
         store.setPendingCommitApproval(data.sessionId, null);
+      }
+    });
+
+    // Unified prompt system handlers
+    this.socket.on('prompt:request', (data: Prompt) => {
+      console.log(`[SOCKET] prompt:request received: type=${data.type}, id=${data.id}`);
+      useSessionStore.getState().setPrompt(data.sessionId, data);
+    });
+
+    this.socket.on('prompt:resolved', (data) => {
+      console.log(`[SOCKET] prompt:resolved received: promptId=${data.promptId}`);
+      const store = useSessionStore.getState();
+      const currentPrompt = store.prompts[data.sessionId];
+      if (currentPrompt?.id === data.promptId) {
+        store.setPrompt(data.sessionId, null);
       }
     });
 
@@ -600,28 +670,34 @@ class SocketService {
   ): Promise<void> {
     console.log(`[SOCKET] Responding to permission ${requestId}: ${action}`);
 
-    // Call the backend API to respond (the long-polling endpoint will pick this up)
-    const token = useAuthStore.getState().token;
-    if (!token) {
-      throw new Error('No auth token');
-    }
-
-    const response = await fetch('/api/permissions/respond', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        requestId,
-        action,
-        pattern,
-        reason,
-      }),
+    // Emit WebSocket event for SDK-based sessions
+    this.socket?.emit('session:permission_respond', {
+      sessionId,
+      requestId,
+      action,
+      pattern,
     });
 
-    if (!response.ok) {
-      throw new Error('Failed to respond to permission request');
+    // Also call the REST API for process-manager-based sessions (it will fail silently if not found)
+    try {
+      const token = useAuthStore.getState().token;
+      if (token) {
+        await fetch('/api/permissions/respond', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            requestId,
+            action,
+            pattern,
+            reason,
+          }),
+        });
+      }
+    } catch {
+      // Ignore REST API errors - SDK sessions don't use this endpoint
     }
 
     // Clear the pending permission from the store
@@ -636,30 +712,51 @@ class SocketService {
   ): Promise<void> {
     console.log(`[SOCKET] Responding to user question ${requestId}`);
 
-    // Call the backend API to respond (the long-polling endpoint will pick this up)
-    const token = useAuthStore.getState().token;
-    if (!token) {
-      throw new Error('No auth token');
-    }
-
-    const response = await fetch('/api/user-questions/respond', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        requestId,
-        answers,
-      }),
+    // Emit WebSocket event for SDK-based sessions
+    this.socket?.emit('session:question_respond', {
+      sessionId,
+      requestId,
+      answers,
     });
 
-    if (!response.ok) {
-      throw new Error('Failed to respond to user question');
+    // Also call the REST API for process-manager-based sessions (it will fail silently if not found)
+    try {
+      const token = useAuthStore.getState().token;
+      if (token) {
+        await fetch('/api/user-questions/respond', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            requestId,
+            answers,
+          }),
+        });
+      }
+    } catch {
+      // Ignore REST API errors - SDK sessions don't use this endpoint
     }
 
     // Clear the pending question from the store
     useSessionStore.getState().setPendingUserQuestion(sessionId, null);
+  }
+
+  // Respond to a unified prompt request
+  respondToPrompt(
+    sessionId: string,
+    promptId: string,
+    response: PromptResponse
+  ): void {
+    console.log(`[SOCKET] Responding to prompt ${promptId}: ${response.type}`);
+    this.socket?.emit('prompt:respond', {
+      sessionId,
+      promptId,
+      response,
+    });
+    // Clear the prompt from the store immediately for responsive UI
+    useSessionStore.getState().setPrompt(sessionId, null);
   }
 
   getSocket(): TypedSocket | null {

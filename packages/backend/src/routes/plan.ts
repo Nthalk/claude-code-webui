@@ -48,7 +48,7 @@ const planRequestSchema = z.object({
 });
 
 const planRespondSchema = z.object({
-  requestId: z.string().uuid(),
+  requestId: z.string().min(1), // Accept any string ID (UUID for process manager, nanoid for SDK)
   approved: z.boolean(),
   reason: z.string().optional(),
 });
@@ -175,6 +175,35 @@ router.post('/respond', requireAuth, async (req: Request, res: Response) => {
   const request = pendingRequests.get(requestId);
 
   if (!request) {
+    // Check if this is a plan approval that came through the permission system
+    const permissionsModule = await import('./permissions');
+    const permission = permissionsModule.getPendingPermissionById(requestId);
+
+    if (permission && permission.toolName === 'ExitPlanMode') {
+      console.log(`[PLAN] Found ExitPlanMode permission request ${requestId}, updating it`);
+
+      // Update the permission request status
+      const updated = permissionsModule.updatePermissionStatus(requestId, approved, reason);
+      if (!updated) {
+        throw new AppError('Failed to update permission status', 500, 'INTERNAL_ERROR');
+      }
+
+      // Notify the queue that this action is resolved
+      pendingActionsQueue.resolveAction(permission.sessionId, requestId);
+
+      // Broadcast to all clients
+      const io: Server = req.app.get('io');
+      io.to(`session:${permission.sessionId}`).emit('session:plan_approval_resolved', {
+        sessionId: permission.sessionId,
+        requestId,
+      });
+
+      return res.json({
+        success: true,
+        approved,
+      });
+    }
+
     throw new AppError('Plan approval request not found or expired', 404, 'NOT_FOUND');
   }
 
@@ -233,6 +262,29 @@ router.get('/pending/:sessionId', requireAuth, (req: Request, res: Response) => 
 });
 
 // Export helper functions for internal use
+
+/**
+ * Register a pending plan approval request (used by SDK manager)
+ * This allows SDK-based sessions to use the same REST API endpoint as process-manager sessions
+ */
+export function registerPendingPlanApproval(
+  sessionId: string,
+  requestId: string,
+  planContent?: string,
+  planPath?: string
+): void {
+  const pendingRequest: PendingPlanApproval = {
+    sessionId,
+    requestId,
+    status: 'pending',
+    createdAt: Date.now(),
+    planContent,
+    planPath,
+  };
+  pendingRequests.set(requestId, pendingRequest);
+  console.log(`[PLAN] Registered SDK plan approval request ${requestId} for session ${sessionId}`);
+}
+
 export function getPendingPlanApprovalsForSession(sessionId: string): PendingPlanApproval[] {
   const pending: PendingPlanApproval[] = [];
   for (const request of pendingRequests.values()) {

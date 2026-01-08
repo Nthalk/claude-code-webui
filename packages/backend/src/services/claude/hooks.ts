@@ -43,10 +43,10 @@ function getBanAskUserQuestionHookPath(): string {
 }
 
 /**
- * Get the path to the redirect-exit-plan-mode hook script.
+ * Get the path to the gate-exit-plan-mode hook script.
  */
-function getRedirectExitPlanModeHookPath(): string {
-  return findCliScript('redirect-exit-plan-mode-hook.ts');
+function getGateExitPlanModeHookPath(): string {
+  return findCliScript('gate-exit-plan-mode-hook.ts');
 }
 
 /**
@@ -54,14 +54,14 @@ function getRedirectExitPlanModeHookPath(): string {
  *
  * This includes:
  * - PreToolUse hook for AskUserQuestion to ban it and redirect to MCP
- * - PreToolUse hook for ExitPlanMode to redirect to MCP confirm_plan
+ * - PreToolUse hook for ExitPlanMode to gate approval until user confirms
  */
 export function getHookJson(): string {
   const banAskUserPath = getBanAskUserQuestionHookPath();
-  const redirectExitPlanPath = getRedirectExitPlanModeHookPath();
+  const gateExitPlanPath = getGateExitPlanModeHookPath();
 
   console.log(`[HOOKS] Using ban-ask-user-question hook: ${banAskUserPath}`);
-  console.log(`[HOOKS] Using redirect-exit-plan-mode hook: ${redirectExitPlanPath}`);
+  console.log(`[HOOKS] Using gate-exit-plan-mode hook: ${gateExitPlanPath}`);
 
   const settings = {
     hooks: {
@@ -76,13 +76,13 @@ export function getHookJson(): string {
             },
           ],
         },
-        // Redirect ExitPlanMode - must use MCP confirm_plan first
+        // Gate ExitPlanMode - wait for user approval
         {
           matcher: 'ExitPlanMode',
           hooks: [
             {
               type: 'command',
-              command: `npx tsx ${redirectExitPlanPath}`,
+              command: `npx tsx ${gateExitPlanPath}`,
             },
           ],
         },

@@ -1006,6 +1006,11 @@ class WebUIMcpServer {
                 if (this.permissionMode === 'planning') {
                     log(`Planning mode: always prompting for ${toolName}`);
                     // Skip pattern checking and go straight to user prompt
+                } else if (toolName === 'ExitPlanMode') {
+                    // Special handling: ExitPlanMode should always go through permission prompt
+                    // to be converted to plan approval
+                    log(`ExitPlanMode detected, bypassing pattern checks for plan approval`);
+                    // Skip pattern checking and go straight to user prompt
                 } else {
                     // Check for auto-approval against settings files
                     const patterns = getAllPermissionPatterns(this.projectPath);

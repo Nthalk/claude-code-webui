@@ -4,7 +4,7 @@ import type { GrepToolInput } from '@claude-code-webui/shared';
 
 interface GrepToolRendererProps {
   input: GrepToolInput;
-  result?: string;
+  result?: string | {content?: string; [key: string]: any};
   error?: string;
   className?: string;
 }
@@ -19,7 +19,19 @@ export const GrepToolRenderer: React.FC<GrepToolRendererProps> = ({
   const renderResult = () => {
     if (!result) return null;
 
-    const lines = result.split('\n').filter(line => line.trim());
+    // Handle case where result might be an object from PostToolUse hook
+    let resultString: string;
+    if (typeof result === 'object' && 'content' in result) {
+      // Result is an object with content property
+      resultString = result.content || '';
+    } else if (typeof result === 'string') {
+      resultString = result;
+    } else {
+      // Fallback: stringify the result
+      resultString = JSON.stringify(result, null, 2);
+    }
+
+    const lines = resultString.split('\n').filter(line => line.trim());
 
     // For files_with_matches mode - simple file list
     if (input.output_mode === 'files_with_matches' || (!input.output_mode && !input['-n'])) {

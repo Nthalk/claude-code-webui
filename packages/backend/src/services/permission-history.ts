@@ -63,10 +63,13 @@ class PermissionHistoryService {
 
     // Emit WebSocket event for real-time updates
     if (this.io) {
+      console.log(`[PERMISSION] Emitting permission:decision to session:${decision.sessionId}`);
       this.io.to(`session:${decision.sessionId}`).emit('permission:decision', {
         sessionId: decision.sessionId,
         decision,
       });
+    } else {
+      console.log(`[PERMISSION] WARNING: No Socket.IO instance set, cannot emit permission:decision`);
     }
 
     console.log(`[PERMISSION] ${decision.decision.toUpperCase()} ${decision.toolName} (${decision.reason}${decision.matchedPattern ? `: ${decision.matchedPattern}` : ''})`);

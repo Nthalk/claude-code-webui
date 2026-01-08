@@ -12,6 +12,7 @@ import { createClaudeManager, type IClaudeManager } from '../services/claude';
 import { GeminiService } from '../services/gemini';
 import { getTodosBySessionId } from '../db/todos';
 import { pendingActionsQueue } from '../services/pendingActionsQueue';
+import { userPromptManager } from '../services/UserPromptManager';
 
 // Global reference to the process manager for use by routes
 let _processManager: IClaudeManager | null = null;
@@ -48,6 +49,9 @@ export function setupWebSocket(httpServer: HttpServer): Server {
 
   // Initialize the pending actions queue with the socket server
   pendingActionsQueue.setSocketServer(io);
+
+  // Initialize the unified prompt manager with the socket server
+  userPromptManager.setSocketServer(io);
 
   // Check Gemini CLI availability on startup
   geminiService.checkAvailability().then((result) => {
@@ -351,6 +355,15 @@ export function setupWebSocket(httpServer: HttpServer): Server {
           });
         }
       }
+
+      // Re-emit active prompt from new unified prompt system
+      userPromptManager.emitToSocket(sessionId, socket.id);
+    });
+
+    // Handle unified prompt responses
+    socket.on('prompt:respond', ({ sessionId, promptId, response }) => {
+      console.log(`[SOCKET EVENT] prompt:respond: ${sessionId} ${promptId} ${response.type}`);
+      userPromptManager.respond(sessionId, promptId, response);
     });
 
     // Cleanup on disconnect

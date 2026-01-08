@@ -10,3 +10,4 @@ export * from './types/websocket';
 export * from './types/github';
 export * from './types/commands';
 export * from './types/tools';
+export * from './types/prompt';

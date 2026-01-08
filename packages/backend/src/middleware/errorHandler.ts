@@ -28,7 +28,12 @@ export function errorHandler(
   res: Response,
   _next: NextFunction
 ): void {
-  console.error('Error:', err);
+  // Only log non-auth errors (auth failures are expected when tokens expire)
+  if (err instanceof AppError && err.statusCode === 401) {
+    // Silent for auth errors - these are expected on startup with stale tokens
+  } else {
+    console.error('Error:', err);
+  }
 
   if (err instanceof AppError) {
     const errorResponse: ApiError = {

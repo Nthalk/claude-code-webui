@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Session, Message, SessionStatus, UsageData, ToolExecution, PendingPermission, PendingUserQuestion, PendingPlanApproval, PendingCommitApproval } from '@claude-code-webui/shared';
+import type { Session, Message, SessionStatus, UsageData, ToolExecution, PendingPermission, PendingUserQuestion, PendingPlanApproval, PendingCommitApproval, Prompt } from '@claude-code-webui/shared';
 
 // Activity state for showing what Claude is doing
 export interface ActivityState {
@@ -57,6 +57,8 @@ interface SessionState {
   pendingUserQuestions: Record<string, PendingUserQuestion | null>;
   pendingPlanApprovals: Record<string, PendingPlanApproval | null>;
   pendingCommitApprovals: Record<string, PendingCommitApproval | null>;
+  // Unified prompt system
+  prompts: Record<string, Prompt | null>;
 
   // File Tree state
   fileTreeOpen: Record<string, boolean>;
@@ -110,6 +112,8 @@ interface SessionState {
   setPendingUserQuestion: (sessionId: string, question: PendingUserQuestion | null) => void;
   setPendingPlanApproval: (sessionId: string, approval: PendingPlanApproval | null) => void;
   setPendingCommitApproval: (sessionId: string, approval: PendingCommitApproval | null) => void;
+  // Unified prompt system
+  setPrompt: (sessionId: string, prompt: Prompt | null) => void;
 
   // File Tree actions
   setFileTreeOpen: (sessionId: string, open: boolean) => void;
@@ -141,6 +145,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   pendingUserQuestions: {},
   pendingPlanApprovals: {},
   pendingCommitApprovals: {},
+  prompts: {},
   fileTreeOpen: {},
   selectedFile: {},
   openFiles: {},
@@ -396,6 +401,15 @@ export const useSessionStore = create<SessionState>((set) => ({
       pendingCommitApprovals: {
         ...state.pendingCommitApprovals,
         [sessionId]: approval,
+      },
+    })),
+
+  // Unified prompt system
+  setPrompt: (sessionId, prompt) =>
+    set((state) => ({
+      prompts: {
+        ...state.prompts,
+        [sessionId]: prompt,
       },
     })),
 

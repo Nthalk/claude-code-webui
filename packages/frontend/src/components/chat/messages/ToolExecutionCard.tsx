@@ -12,6 +12,7 @@ import {
     FolderSearch,
     GitBranch,
     Globe,
+    HelpCircle,
     Loader2,
     Search,
     Terminal,
@@ -34,6 +35,7 @@ import {WebSearchToolRenderer} from '../WebSearchToolRenderer';
 import {ReadToolRenderer} from '../ReadToolRenderer';
 import {PlanRenderer} from '../PlanRenderer';
 import {ExploreRenderer} from '../ExploreRenderer';
+import {AskUserQuestionRenderer} from '../AskUserQuestionRenderer';
 import {stripWorkingDirectory} from '@/lib/utils';
 
 interface ToolExecutionCardProps {
@@ -57,6 +59,7 @@ const getToolDisplay = (toolName: string): { icon: typeof Wrench; label: string;
         'Task': {icon: Cpu, label: 'Agent', inputLabel: 'Task'},
         'TodoWrite': {icon: CheckSquare, label: 'Todo', inputLabel: 'Tasks'},
         'Git': {icon: GitBranch, label: 'Git', inputLabel: 'Command'},
+        'AskUserQuestion': {icon: HelpCircle, label: 'Ask User', inputLabel: 'Questions'},
     };
 
     return toolMap[toolName] || {icon: Wrench, label: toolName, inputLabel: 'Input'};
@@ -114,6 +117,15 @@ const getInputPreviewTwoLine = (toolName: string, input: unknown, workingDirecto
                 description: String(inputObj.description || ''),
                 detail: String(inputObj.subagent_type || ''),
             };
+        case 'AskUserQuestion': {
+            const questions = inputObj.questions as Array<{ question: string }> || [];
+            const count = questions.length;
+            const firstQ = questions[0]?.question || '';
+            return {
+                description: `${count} question${count !== 1 ? 's' : ''}`,
+                detail: firstQ.length > 50 ? firstQ.substring(0, 50) + '...' : firstQ,
+            };
+        }
         default:
             return {description: '', detail: JSON.stringify(input).substring(0, 100)};
     }
@@ -350,6 +362,12 @@ export function ToolExecutionCard({execution, workingDirectory}: ToolExecutionCa
                                 status={execution.status}
                             />
                         )
+                    ) : execution.toolName === 'AskUserQuestion' && parsedInput && typeof parsedInput === 'object' ? (
+                        <AskUserQuestionRenderer
+                            input={parsedInput as any}
+                            result={execution.result}
+                            error={execution.error}
+                        />
                     ) : (
                         <>
                             {/* Default renderer for other tools */}

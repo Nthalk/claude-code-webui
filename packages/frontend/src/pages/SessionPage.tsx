@@ -30,10 +30,9 @@ import { ChatMessage } from '@/components/chat/messages/ChatMessage';
 import { GeneratedImage } from '@/components/chat/GeneratedImage';
 import type { MobileView } from '@/components/mobile';
 import { useSessionStore } from '@/stores/sessionStore';
-import { useAuthStore } from '@/stores/authStore';
 import { api } from '@/services/api';
 import { socketService } from '@/services/socket';
-import type { Session, Message, ApiResponse, CliTool, CliToolExecution, Command, CommandExecutionResult, SessionMode, ModelType, ToolExecution } from '@claude-code-webui/shared';
+import type { Session, Message, ApiResponse, CliTool, CliToolExecution, Command, CommandExecutionResult, SessionMode, ModelType, ToolExecution, PromptResponse } from '@claude-code-webui/shared';
 import { cn } from '@/lib/utils';
 import { CommandMenu } from '@/components/chat/CommandMenu';
 import { ToolExecutionCard } from '@/components/chat/messages/ToolExecutionCard';
@@ -43,7 +42,6 @@ import { PlanApprovalInput } from '@/components/chat/PlanApprovalInput';
 import { CommitApprovalInput } from '@/components/chat/CommitApprovalInput';
 import { useDocumentSwipeGesture, useChanged, timeBlock } from '@/hooks';
 import { useTheme, type FontFamily, type FontSize } from '@/providers/ThemeProvider';
-import type { PermissionAction, UserQuestionAnswers } from '@claude-code-webui/shared';
 
 interface ImageAttachment {
   id: string;
@@ -92,10 +90,7 @@ export function SessionPage() {
   const todos = useSessionStore((state) => state.todos);
   const generatedImages = useSessionStore((state) => state.generatedImages);
   const toolExecutions = useSessionStore((state) => state.toolExecutions);
-  const pendingPermissions = useSessionStore((state) => state.pendingPermissions);
-  const pendingUserQuestions = useSessionStore((state) => state.pendingUserQuestions);
-  const pendingPlanApprovals = useSessionStore((state) => state.pendingPlanApprovals);
-  const pendingCommitApprovals = useSessionStore((state) => state.pendingCommitApprovals);
+  const prompts = useSessionStore((state) => state.prompts);
   const selectedFile = useSessionStore((state) => state.selectedFile);
   const openFiles = useSessionStore((state) => state.openFiles);
   const usage = useSessionStore((state) => state.usage);
@@ -240,10 +235,8 @@ export function SessionPage() {
   const currentGeneratedImages = generatedImages[id || ''] || [];
   const isCompacting = compacting[id || ''] || false;
   const currentToolExecutions = toolExecutions[id || ''] || [];
-  const currentPendingPermission = pendingPermissions[id || ''] || null;
-  const currentPendingUserQuestion = pendingUserQuestions[id || ''] || null;
-  const currentPendingPlanApproval = pendingPlanApprovals[id || ''] || null;
-  const currentPendingCommitApproval = pendingCommitApprovals[id || ''] || null;
+  // Unified prompt system
+  const currentPrompt = prompts[id || ''] || null;
   const hasTodos = currentTodos.length > 0 && currentTodos.some(t => t.status !== 'completed');
 
   // Right panel state from store (controlled by sidebar toggle buttons)
@@ -814,94 +807,11 @@ export function SessionPage() {
     }
   }, [id, isChangingModel]);
 
-  const handlePermissionResponse = useCallback(async (action: PermissionAction, pattern?: string, reason?: string) => {
-    if (!id || !currentPendingPermission) return;
-    try {
-      await socketService.respondToPermission(
-        id,
-        currentPendingPermission.requestId,
-        action,
-        pattern,
-        reason
-      );
-    } catch (error) {
-      console.error('Failed to respond to permission request:', error);
-    }
-  }, [id, currentPendingPermission]);
-
-  const handleUserQuestionResponse = useCallback(async (answers: UserQuestionAnswers) => {
-    if (!id || !currentPendingUserQuestion) return;
-    try {
-      await socketService.respondToUserQuestion(
-        id,
-        currentPendingUserQuestion.requestId,
-        answers
-      );
-    } catch (error) {
-      console.error('Failed to respond to user question:', error);
-    }
-  }, [id, currentPendingUserQuestion]);
-
-  const handlePlanApprovalResponse = useCallback(async (approved: boolean, reason?: string) => {
-    if (!id || !currentPendingPlanApproval) return;
-    try {
-      const token = useAuthStore.getState().token;
-      if (!token) {
-        throw new Error('No auth token');
-      }
-
-      // Send response to backend API
-      const response = await fetch('/api/plan/respond', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          requestId: currentPendingPlanApproval.requestId,
-          approved,
-          reason
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to respond to plan approval');
-      }
-    } catch (error) {
-      console.error('Failed to respond to plan approval request:', error);
-    }
-  }, [id, currentPendingPlanApproval]);
-
-  const handleCommitApprovalResponse = useCallback(async (approved: boolean, push?: boolean, reason?: string) => {
-    if (!id || !currentPendingCommitApproval) return;
-    try {
-      const token = useAuthStore.getState().token;
-      if (!token) {
-        throw new Error('No auth token');
-      }
-
-      // Send response to backend API
-      const response = await fetch('/api/commit/respond', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          requestId: currentPendingCommitApproval.requestId,
-          approved,
-          push,
-          reason
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to respond to commit approval');
-      }
-    } catch (error) {
-      console.error('Failed to respond to commit approval request:', error);
-    }
-  }, [id, currentPendingCommitApproval]);
+  // Unified prompt response handler - dispatches to socketService.respondToPrompt()
+  const handlePromptResponse = useCallback((response: PromptResponse) => {
+    if (!id || !currentPrompt) return;
+    socketService.respondToPrompt(id, currentPrompt.id, response);
+  }, [id, currentPrompt]);
 
   const handleCancelCliTool = () => {
     if (cliToolAbortRef.current) {
@@ -1432,16 +1342,25 @@ export function SessionPage() {
       {mainView !== 'editor' && (
         <div className="shrink-0 pt-1 md:pt-4 border-t space-y-1 md:space-y-3">
           {/* Plan Approval Input - replaces regular input when a plan needs approval */}
-          {currentPendingPlanApproval ? (
+          {currentPrompt?.type === 'plan_approval' ? (
             <PlanApprovalInput
-              onRespond={handlePlanApprovalResponse}
-              planContent={currentPendingPlanApproval?.planContent}
+              onRespond={(approved, reason) => handlePromptResponse({
+                type: 'plan_approval',
+                approved,
+                reason,
+              })}
+              planContent={currentPrompt.planContent}
             />
-          ) : currentPendingCommitApproval ? (
+          ) : currentPrompt?.type === 'commit_approval' ? (
             <CommitApprovalInput
-              onRespond={handleCommitApprovalResponse}
-              commitMessage={currentPendingCommitApproval.commitMessage}
-              gitStatus={currentPendingCommitApproval.gitStatus}
+              onRespond={(approved, push, reason) => handlePromptResponse({
+                type: 'commit_approval',
+                approved,
+                push,
+                reason,
+              })}
+              commitMessage={currentPrompt.commitMessage}
+              gitStatus={currentPrompt.gitStatus}
             />
           ) : (
             <>
@@ -1612,18 +1531,36 @@ export function SessionPage() {
       )}
 
       {/* Permission Approval Dialog */}
-      {currentPendingPermission && (
+      {currentPrompt?.type === 'permission' && (
         <PermissionApprovalDialog
-          permission={currentPendingPermission}
-          onRespond={handlePermissionResponse}
+          permission={{
+            requestId: currentPrompt.id,
+            sessionId: currentPrompt.sessionId,
+            toolName: currentPrompt.toolName,
+            toolInput: currentPrompt.toolInput,
+            description: currentPrompt.description,
+            suggestedPattern: currentPrompt.suggestedPattern,
+          }}
+          onRespond={(action, pattern) => handlePromptResponse({
+            type: 'permission',
+            approved: action !== 'deny',
+            pattern,
+          })}
         />
       )}
 
       {/* User Question Dialog */}
-      {currentPendingUserQuestion && (
+      {currentPrompt?.type === 'user_question' && (
         <UserQuestionDialog
-          question={currentPendingUserQuestion}
-          onRespond={handleUserQuestionResponse}
+          question={{
+            requestId: currentPrompt.id,
+            sessionId: currentPrompt.sessionId,
+            questions: currentPrompt.questions,
+          }}
+          onRespond={(answers) => handlePromptResponse({
+            type: 'user_question',
+            answers,
+          })}
         />
       )}
 
