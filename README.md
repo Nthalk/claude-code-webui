@@ -1,4 +1,5 @@
 # Claude Code WebUI
+<!-- Test change for permission system -->
 
 A powerful web-based interface for Claude Code CLI with real-time collaboration, enhanced development workflows, and comprehensive project management.
 
