@@ -2,7 +2,6 @@ import React from 'react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { getLanguageFromPath } from '@/components/code-editor/language-map';
-import { stripWorkingDirectory } from '@/lib/utils';
 import type { ReadToolInput } from '@claude-code-webui/shared';
 
 interface ReadToolRendererProps {
@@ -33,49 +32,55 @@ export const ReadToolRenderer: React.FC<ReadToolRendererProps> = ({
   input,
   result,
   error,
-  workingDirectory,
+  workingDirectory: _workingDirectory, // Prefix with _ to indicate intentionally unused
 }) => {
   const filePath = input.file_path || '';
-  const displayPath = stripWorkingDirectory(filePath, workingDirectory);
   const monacoLang = getLanguageFromPath(filePath);
   const prismLang = monacoToPrismLanguage[monacoLang] || monacoLang;
 
-  // Extract line range info if present
-  const hasLineRange = input.offset !== undefined || input.limit !== undefined;
-  const startLine = input.offset || 1;
-  const endLine = input.limit ? startLine + input.limit - 1 : undefined;
+  // Parse result - SDK returns structured JSON
+  let fileContent = '';
+  let actualStartLine = input.offset || 1;
+
+  if (result) {
+    if (typeof result === 'string') {
+      try {
+        const parsed = JSON.parse(result);
+        // Check if it's structured SDK response
+        if (parsed.type === 'text' && parsed.file?.content) {
+          fileContent = parsed.file.content;
+          actualStartLine = parsed.file.startLine || actualStartLine;
+        } else {
+          // Not SDK format, use as is
+          fileContent = result;
+        }
+      } catch {
+        // Not JSON, use as string
+        fileContent = result;
+      }
+    } else {
+      fileContent = String(result);
+    }
+  }
 
   return (
     <div className="space-y-2">
-      {/* File header with path */}
-      <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 rounded-t border border-gray-200 dark:border-gray-700">
-        <span className="font-semibold flex-shrink-0 text-xs">File:</span>
-        <span className="overflow-x-auto whitespace-nowrap scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent text-xs font-mono">
-          {displayPath}
-        </span>
-        {hasLineRange && (
-          <span className="ml-auto flex-shrink-0 text-xs opacity-70">
-            Lines {startLine}{endLine ? `-${endLine}` : '+'}
-          </span>
-        )}
-      </div>
-
       {/* File content */}
-      {result && (
-        <div className="overflow-auto max-h-[500px] rounded-b">
+      {fileContent && (
+        <div className="overflow-auto max-h-[500px] rounded">
           <SyntaxHighlighter
             language={prismLang}
             style={oneDark}
             showLineNumbers={true}
-            startingLineNumber={startLine}
+            startingLineNumber={actualStartLine}
             className="!m-0 !text-xs"
             customStyle={{
               margin: 0,
-              borderRadius: '0 0 0.375rem 0.375rem',
+              borderRadius: '0.375rem',
               fontSize: '0.75rem',
             }}
           >
-            {result}
+            {fileContent}
           </SyntaxHighlighter>
         </div>
       )}

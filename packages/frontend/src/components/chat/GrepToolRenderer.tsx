@@ -1,31 +1,76 @@
 import React from 'react';
-import { Search, FileText } from 'lucide-react';
+import { FileText } from 'lucide-react';
 import type { GrepToolInput } from '@claude-code-webui/shared';
+import { stripWorkingDirectory } from '@/lib/utils';
 
 interface GrepToolRendererProps {
   input: GrepToolInput;
   result?: string | {content?: string; [key: string]: any};
   error?: string;
   className?: string;
+  workingDirectory?: string;
 }
 
 export const GrepToolRenderer: React.FC<GrepToolRendererProps> = ({
   input,
   result,
   error,
-  className = ''
+  className = '',
+  workingDirectory
 }) => {
   // Parse grep output based on output mode
   const renderResult = () => {
     if (!result) return null;
 
-    // Handle case where result might be an object from PostToolUse hook
+    // Check if result is a structured JSON response from SDK
+    let parsedResult: any;
     let resultString: string;
-    if (typeof result === 'object' && 'content' in result) {
+
+    if (typeof result === 'string') {
+      try {
+        parsedResult = JSON.parse(result);
+        // If it has a 'mode' property, it's the SDK format
+        if (parsedResult.mode) {
+          // Use the structured data directly
+          if (parsedResult.mode === 'files_with_matches' && parsedResult.filenames) {
+            return (
+              <div className="space-y-1">
+                {parsedResult.filenames.map((file: string, idx: number) => (
+                  <div key={idx} className="flex items-center gap-2 px-3 py-1 hover:bg-muted/50 transition-colors">
+                    <FileText className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                    <code className="text-xs text-blue-600 dark:text-blue-400 truncate">
+                      {stripWorkingDirectory(file, workingDirectory || '')}
+                    </code>
+                  </div>
+                ))}
+                {parsedResult.numFiles > 0 && (
+                  <div className="px-3 py-1 text-xs text-muted-foreground">
+                    Found {parsedResult.numFiles} file{parsedResult.numFiles !== 1 ? 's' : ''}
+                  </div>
+                )}
+              </div>
+            );
+          } else if (parsedResult.mode === 'content' && parsedResult.content) {
+            // Content mode - use the content directly
+            resultString = parsedResult.content;
+          } else if (parsedResult.filenames) {
+            // Other modes with filenames
+            resultString = parsedResult.filenames.join('\n');
+          } else {
+            // Fallback
+            resultString = '';
+          }
+        } else {
+          // Not SDK format, use as string
+          resultString = result;
+        }
+      } catch {
+        // Not JSON, use as string
+        resultString = result;
+      }
+    } else if (typeof result === 'object' && 'content' in result) {
       // Result is an object with content property
       resultString = result.content || '';
-    } else if (typeof result === 'string') {
-      resultString = result;
     } else {
       // Fallback: stringify the result
       resultString = JSON.stringify(result, null, 2);
@@ -57,7 +102,9 @@ export const GrepToolRenderer: React.FC<GrepToolRendererProps> = ({
               <div key={idx} className="flex items-center justify-between px-3 py-1 hover:bg-muted/50 transition-colors">
                 <div className="flex items-center gap-2 truncate">
                   <FileText className="h-3 w-3 text-muted-foreground flex-shrink-0" />
-                  <code className="text-xs text-blue-600 dark:text-blue-400 truncate">{file}</code>
+                  <code className="text-xs text-blue-600 dark:text-blue-400 truncate">
+                    {stripWorkingDirectory(file || '', workingDirectory)}
+                  </code>
                 </div>
                 <span className="text-xs font-medium text-muted-foreground">{count} matches</span>
               </div>
@@ -78,7 +125,9 @@ export const GrepToolRenderer: React.FC<GrepToolRendererProps> = ({
               const [, file, lineNum, content] = match;
               return (
                 <div key={idx} className="hover:bg-muted/30 px-1 -mx-1">
-                  <span className="text-blue-600 dark:text-blue-400">{file}</span>
+                  <span className="text-blue-600 dark:text-blue-400">
+                    {stripWorkingDirectory(file || '', workingDirectory)}
+                  </span>
                   <span className="text-gray-500 dark:text-gray-400">:</span>
                   <span className="text-green-600 dark:text-green-400">{lineNum}</span>
                   <span className="text-gray-500 dark:text-gray-400">:</span>
@@ -115,46 +164,6 @@ export const GrepToolRenderer: React.FC<GrepToolRendererProps> = ({
 
   return (
     <div className={`font-mono text-xs ${className}`}>
-      {/* Search header */}
-      <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700">
-        <Search className="h-4 w-4 text-muted-foreground" />
-        <span className="font-medium">Pattern:</span>
-        <code className="text-purple-600 dark:text-purple-400 font-semibold">{input.pattern}</code>
-        {input['-i'] && (
-          <span className="text-[10px] px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 rounded">
-            case-insensitive
-          </span>
-        )}
-      </div>
-
-      {/* Search options */}
-      <div className="flex flex-wrap gap-2 px-3 py-2 bg-gray-50/50 dark:bg-gray-800/30 border-b border-gray-200 dark:border-gray-700 text-[10px]">
-        {input.path && (
-          <span className="flex items-center gap-1">
-            <span className="text-muted-foreground">Path:</span>
-            <code className="text-foreground">{input.path}</code>
-          </span>
-        )}
-        {input.glob && (
-          <span className="flex items-center gap-1">
-            <span className="text-muted-foreground">Glob:</span>
-            <code className="text-foreground">{input.glob}</code>
-          </span>
-        )}
-        {input.type && (
-          <span className="flex items-center gap-1">
-            <span className="text-muted-foreground">Type:</span>
-            <code className="text-foreground">{input.type}</code>
-          </span>
-        )}
-        {input.output_mode && (
-          <span className="flex items-center gap-1">
-            <span className="text-muted-foreground">Mode:</span>
-            <code className="text-foreground">{input.output_mode}</code>
-          </span>
-        )}
-      </div>
-
       {/* Results */}
       {result ? (
         renderResult()

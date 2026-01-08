@@ -1,5 +1,4 @@
 import React from 'react';
-import { Terminal } from 'lucide-react';
 import type { BashToolInput } from '@claude-code-webui/shared';
 import { BashOutputRenderer } from './BashOutputRenderer';
 
@@ -11,7 +10,7 @@ interface BashToolRendererProps {
 }
 
 export const BashToolRenderer: React.FC<BashToolRendererProps> = ({
-  input,
+  input: _input, // Prefix with _ to indicate intentionally unused
   result,
   error,
   className = ''
@@ -22,23 +21,9 @@ export const BashToolRenderer: React.FC<BashToolRendererProps> = ({
 
   return (
     <div className={`font-mono text-xs ${className}`}>
-      {/* Command header */}
-      <div className="flex items-center gap-2 px-3 py-2 bg-gray-900 dark:bg-black text-gray-100 border-b border-gray-700">
-        <Terminal className="h-4 w-4" />
-        <span className="text-green-400">$</span>
-        <span className="flex-1 break-all">{input.command}</span>
-      </div>
-
-      {/* Description if provided */}
-      {input.description && (
-        <div className="px-3 py-1 bg-gray-800 dark:bg-gray-900 text-gray-300 text-xs italic border-b border-gray-700">
-          {input.description}
-        </div>
-      )}
-
       {/* Output/Result */}
       {(result || error) ? (
-        <div className="bg-gray-900 dark:bg-black text-gray-100 p-3">
+        <div className="bg-gray-900 dark:bg-black text-gray-100 p-3 rounded">
           <BashOutputRenderer
             output={result || ''}
             error={error}
@@ -46,7 +31,7 @@ export const BashToolRenderer: React.FC<BashToolRendererProps> = ({
           />
         </div>
       ) : (
-        <div className="bg-gray-900 dark:bg-black text-gray-400 p-3 flex items-center gap-2">
+        <div className="bg-gray-900 dark:bg-black text-gray-400 p-3 flex items-center gap-2 rounded">
           <span className="animate-pulse">Executing...</span>
         </div>
       )}

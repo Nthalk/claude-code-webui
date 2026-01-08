@@ -1,5 +1,6 @@
 import {useCallback, useState} from 'react';
 import {
+    Bug,
     Check,
     CheckCircle2,
     CheckSquare,
@@ -22,6 +23,7 @@ import {
 import type {
     BashToolInput,
     EditToolInput,
+    GlobToolInput,
     GrepToolInput,
     ReadToolInput,
     TaskToolInput,
@@ -31,6 +33,7 @@ import type {
 import {EditToolDiff} from '../EditToolDiff';
 import {BashToolRenderer} from '../BashToolRenderer';
 import {GrepToolRenderer} from '../GrepToolRenderer';
+import {GlobToolRenderer} from '../GlobToolRenderer';
 import {WebSearchToolRenderer} from '../WebSearchToolRenderer';
 import {ReadToolRenderer} from '../ReadToolRenderer';
 import {PlanRenderer} from '../PlanRenderer';
@@ -256,6 +259,7 @@ const parseInput = (input: unknown): unknown => {
 
 export function ToolExecutionCard({execution, workingDirectory}: ToolExecutionCardProps) {
     const [expanded, setExpanded] = useState(false);
+    const [showDebug, setShowDebug] = useState(false);
     const {icon: Icon, label} = getToolDisplay(execution.toolName);
 
     // Parse input if it's a JSON string
@@ -287,6 +291,21 @@ export function ToolExecutionCard({execution, workingDirectory}: ToolExecutionCa
                 )}
                 {/* Spacer when no description */}
                 {!description && <span className="flex-1"/>}
+                {/* Debug toggle button - only show when expanded and has result */}
+                {expanded && execution.result && (
+                    <button
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            setShowDebug(!showDebug);
+                        }}
+                        className={`p-0.5 rounded transition-colors ${
+                            showDebug ? 'text-amber-400 bg-amber-400/10' : 'text-zinc-400 hover:text-zinc-300'
+                        }`}
+                        title={showDebug ? 'Hide raw JSON' : 'Show raw JSON'}
+                    >
+                        <Bug className="h-3 w-3" />
+                    </button>
+                )}
                 {isExpandable && (
                     <>
                         {expanded ? (
@@ -311,6 +330,26 @@ export function ToolExecutionCard({execution, workingDirectory}: ToolExecutionCa
             {/* Expanded content */}
             {expanded && (
                 <div className="mt-2 space-y-2">
+                    {/* Show raw JSON when debug mode is enabled */}
+                    {showDebug && execution.result ? (
+                        <div className="flex flex-col gap-0.5">
+                            <div className="flex items-center gap-1">
+                                <span className="text-amber-400 text-[10px] uppercase tracking-wide">Raw JSON Output</span>
+                                <CopyButton text={execution.result}/>
+                            </div>
+                            <pre className="p-2 bg-zinc-900 border border-amber-400/20 rounded text-xs overflow-auto max-h-96 whitespace-pre-wrap break-all text-amber-200/90 font-mono">
+                                {(() => {
+                                    try {
+                                        const parsed = JSON.parse(execution.result);
+                                        return JSON.stringify(parsed, null, 2);
+                                    } catch {
+                                        return execution.result;
+                                    }
+                                })()}
+                            </pre>
+                        </div>
+                    ) : (
+                    <>
                     {/* Special renderers for specific tools */}
                     {execution.toolName === 'Edit' && parsedInput && typeof parsedInput === 'object' ? (
                         <EditToolDiff
@@ -330,6 +369,14 @@ export function ToolExecutionCard({execution, workingDirectory}: ToolExecutionCa
                             input={parsedInput as GrepToolInput}
                             result={execution.result}
                             error={execution.error}
+                            workingDirectory={workingDirectory}
+                        />
+                    ) : execution.toolName === 'Glob' && parsedInput && typeof parsedInput === 'object' ? (
+                        <GlobToolRenderer
+                            input={parsedInput as GlobToolInput}
+                            result={execution.result}
+                            error={execution.error}
+                            workingDirectory={workingDirectory}
                         />
                     ) : execution.toolName === 'WebSearch' && parsedInput && typeof parsedInput === 'object' ? (
                         <WebSearchToolRenderer
@@ -413,6 +460,8 @@ export function ToolExecutionCard({execution, workingDirectory}: ToolExecutionCa
                                 </div>
                             )}
                         </>
+                    )}
+                    </>
                     )}
                 </div>
             )}

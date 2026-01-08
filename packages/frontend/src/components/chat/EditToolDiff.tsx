@@ -1,5 +1,4 @@
 import React from 'react';
-import { stripWorkingDirectory } from '@/lib/utils';
 
 interface EditToolDiffProps {
   oldString: string;
@@ -68,12 +67,11 @@ function computeSimpleDiff(oldText: string, newText: string) {
 export const EditToolDiff: React.FC<EditToolDiffProps> = ({
   oldString,
   newString,
-  filePath,
-  workingDirectory,
+  filePath: _filePath, // Prefix with _ to indicate intentionally unused
+  workingDirectory: _workingDirectory, // Prefix with _ to indicate intentionally unused
   className = ''
 }) => {
   const changes = computeSimpleDiff(oldString, newString);
-  const displayPath = filePath ? stripWorkingDirectory(filePath, workingDirectory) : undefined;
 
   // Count changes for summary
   const stats = changes.reduce((acc, change) => {
@@ -84,16 +82,7 @@ export const EditToolDiff: React.FC<EditToolDiffProps> = ({
 
   return (
     <div className={`font-mono text-xs ${className}`}>
-      {displayPath && (
-        <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 border-b border-gray-200 dark:border-gray-700">
-          <span className="font-semibold flex-shrink-0">File:</span>
-          <span className="overflow-x-auto whitespace-nowrap scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent">
-            {displayPath}
-          </span>
-        </div>
-      )}
-
-      <div className="flex items-center gap-4 px-3 py-2 bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700">
+      <div className="flex items-center gap-4 px-3 py-2 bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-t">
         <span className="text-green-600 dark:text-green-400">
           +{stats.additions} addition{stats.additions !== 1 ? 's' : ''}
         </span>
@@ -102,7 +91,7 @@ export const EditToolDiff: React.FC<EditToolDiffProps> = ({
         </span>
       </div>
 
-      <div className="overflow-auto max-h-96">
+      <div className="overflow-auto max-h-96 rounded-b border border-t-0 border-gray-200 dark:border-gray-700">
         <pre className="p-3 bg-gray-50 dark:bg-gray-900/50">
           {changes.map((change, index) => {
             const key = `${index}`;
